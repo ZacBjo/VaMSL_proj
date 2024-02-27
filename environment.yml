@@ -1,4 +1,4 @@
-name: dibs
+name: vamsl
 channels:
 - defaults
 dependencies:

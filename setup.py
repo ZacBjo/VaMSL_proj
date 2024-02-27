@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 setup(
-    name='dibs-lib',
-    version='1.3.3',
-    description='DiBS: Differentiable Bayesian Structure Learning',
-    author='Lars Lorch',
-    author_email='lars.lorch@inf.ethz.ch',
-    url="https://github.com/larslorch/dibs",
+    name='vamsl-lib',
+    version='1.0',
+    description='VaMSL: Variational Mixture Structure Learning',
+    author='',
+    author_email='',
+    url="",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
