@@ -169,3 +169,105 @@ class VaMSL(MixtureJointDiBS):
     
     def set_E(self, E):
         self.E = E
+        
+
+    ## Overriding functions
+    
+    def particle_to_g_lim(self, z, E_k):
+        """
+        Returns :math:`G` corresponding to :math:`\\alpha = \\infty` for particles `z`
+
+        Args:
+            z (ndarray): latent variables ``[..., d, k, 2]``
+
+        Returns:
+            graph adjacency matrices of shape ``[..., d, d]``
+        """
+        u, v = z[..., 0], z[..., 1]
+        scores = jnp.einsum('...ik,...jk->...ij', u, v)
+        g_samples = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*(scores > 0).astype(jnp.int32)
+
+        # mask diagonal since it is explicitly not modeled
+        return zero_diagonal(g_samples)
+    
+    
+    def eltwise_particle_to_g_lim(self, q_z_k, E_k):
+        return vmap(self.particle_to_g_lim, (0, None))(q_z_k, E_k)
+    
+    
+    def compwise_particle_to_g_lim(self, q_z, E):
+        return vmap(self.eltwise_particle_to_g_lim, (0, 0))(q_z, E)
+    
+    
+    #
+    # Overriding functions for conditional graph information (prior and elicited)  
+    #
+    
+    #@override
+    def particle_to_soft_graph(self, z, eps, t, E_k):
+        """
+        Gumbel-softmax / concrete distribution using Logistic(0,1) samples ``eps``
+
+        Args:
+            z (ndarray): a single latent tensor :math:`Z` of shape ``[d, k, 2]```
+            eps (ndarray): random i.i.d. Logistic(0,1) noise  of shape ``[d, d]``
+            t (int): step
+
+        Returns:
+            Gumbel-softmax sample of adjacency matrix [d, d]
+        """
+        scores = jnp.einsum('...ik,...jk->...ij', z[..., 0], z[..., 1])
+
+        # soft reparameterization using gumbel-softmax/concrete distribution
+        # eps ~ Logistic(0,1)
+        #soft_graph = sigmoid(self.tau * (eps + self.alpha(t) * scores)) #original
+        soft_graph = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.tau * (eps + self.alpha(t) * scores)) # TEST
+
+
+        # mask diagonal since it is explicitly not modeled
+        return zero_diagonal(soft_graph)
+
+    
+    #@override
+    def edge_probs(self, z, t, E_k):
+        """
+        Edge probabilities encoded by latent representation
+
+        Args:
+            z (ndarray): latent tensors :math:`Z`  ``[..., d, k, 2]``
+            t (int): step
+
+        Returns:
+            edge probabilities of shape ``[..., d, d]``
+        """
+        u, v = z[..., 0], z[..., 1]
+        scores = jnp.einsum('...ik,...jk->...ij', u, v)
+        #probs = sigmoid(self.alpha(t) * scores) # original
+        probs = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.alpha(t) * scores) # TEST
+
+        # mask diagonal since it is explicitly not modeled
+        return zero_diagonal(probs)
+
+    
+    #@override
+    def edge_log_probs(self, z, t, E_k):
+        """
+        Edge log probabilities encoded by latent representation
+
+        Args:
+            z (ndarray): latent tensors :math:`Z` ``[..., d, k, 2]``
+            t (int): step
+
+        Returns:
+            tuple of tensors ``[..., d, d], [..., d, d]`` corresponding to ``log(p)`` and ``log(1-p)``
+        """ 
+        u, v = z[..., 0], z[..., 1]
+        scores = jnp.einsum('...ik,...jk->...ij', u, v)
+        
+        #log_probs, log_probs_neg = log_sigmoid(self.alpha(t) * scores), log_sigmoid(self.alpha(t) * -scores) #original
+        log_probs = jnp.log((E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.alpha(t) * scores))
+        log_probs_neg = jnp.log((E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.alpha(t) * -scores))
+        
+        # mask diagonal since it is explicitly not modeled
+        # NOTE: this is not technically log(p), but the way `edge_log_probs_` is used, this is correct
+        return zero_diagonal(log_probs), zero_diagonal(log_probs_neg)
