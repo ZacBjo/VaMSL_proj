@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from dibs.utils.func import squared_norm_pytree
+from vamsl.utils.func import squared_norm_pytree
 
 class AdditiveFrobeniusSEKernel:
     """

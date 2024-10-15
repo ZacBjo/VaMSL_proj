@@ -10,8 +10,8 @@ from jax.nn.initializers import normal
 import jax.example_libraries.stax as stax
 from jax.example_libraries.stax import Dense, Sigmoid, LeakyRelu, Relu, Tanh
 
-from dibs.graph_utils import graph_to_mat
-from dibs.utils.tree import tree_shapes
+from vamsl.graph_utils import graph_to_mat
+from vamsl.utils.tree import tree_shapes
 
 
 def dense_no_bias(out_dim, w_init=None):

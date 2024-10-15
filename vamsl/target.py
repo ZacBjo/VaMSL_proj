@@ -1,10 +1,10 @@
 import jax.numpy as jnp
 from jax import random
 
-from dibs.models.graph import ErdosReniDAGDistribution, ScaleFreeDAGDistribution, UniformDAGDistributionRejection
-from dibs.graph_utils import graph_to_mat
+from vamsl.models.graph import ErdosReniDAGDistribution, ScaleFreeDAGDistribution, UniformDAGDistributionRejection
+from vamsl.graph_utils import graph_to_mat
 
-from dibs.models import LinearGaussian, BGe, DenseNonlinearGaussian
+from vamsl.models import LinearGaussian, DenseNonlinearGaussian
 
 from typing import Any, NamedTuple
 
