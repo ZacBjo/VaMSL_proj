@@ -3,8 +3,8 @@ import random as pyrandom
 import jax.numpy as jnp
 from jax import random
 
-from dibs.graph_utils import mat_to_graph, graph_to_mat, mat_is_dag
-from dibs.utils.func import zero_diagonal
+from vamsl.graph_utils import mat_to_graph, graph_to_mat, mat_is_dag
+from vamsl.utils.func import zero_diagonal
 
 
 class ErdosReniDAGDistribution:
