@@ -8,13 +8,13 @@ from jax.tree_util import tree_map
 from jax.scipy.special import logsumexp
 from jax.example_libraries import optimizers
 
-from dibs.inference.dibs import DiBS
-from dibs.kernel import AdditiveFrobeniusSEKernel, JointAdditiveFrobeniusSEKernel
-from dibs.metrics import ParticleDistribution
-from dibs.utils.func import expand_by
+from vamsl.inference.dibs import MixtureDiBS
+from vamsl.kernel import AdditiveFrobeniusSEKernel, JointAdditiveFrobeniusSEKernel
+from vamsl.metrics import ParticleDistribution
+from vamsl.utils.func import expand_by
 
 
-class JointDiBS(DiBS):
+class MixtureJointDiBS(MixtureDiBS):
     """
     This class implements Stein Variational Gradient Descent (SVGD) (Liu and Wang, 2016)
     for DiBS inference (Lorch et al., 2021) of the marginal DAG posterior :math:`p(G | D)`.
@@ -123,22 +123,18 @@ class JointDiBS(DiBS):
         else:
             raise ValueError()
 
-    def _sample_initial_random_particles(self, *, key, n_particles, n_dim=None):
+    def _sample_initial_random_particles(self, key, n_particles, n_dim):
         """
         Samples random particles to initialize SVGD
 
         Args:
             key (ndarray): rng key
             n_particles (int): number of particles inferred
-            n_dim (int): size of latent dimension :math:`k`. Defaults to ``n_vars``, s.t. :math:`k = d`
+            n_dim (int): size of latent dimension :math:`k`.
 
         Returns:
             batch of latent tensors ``[n_particles, d, k, 2]``
         """
-        # default full rank
-        if n_dim is None:
-            n_dim = self.n_vars
-
         # std like Gaussian prior over Z
         std = self.latent_prior_std or (1.0 / jnp.sqrt(n_dim))
 
@@ -150,9 +146,35 @@ class JointDiBS(DiBS):
         theta = self.likelihood_model.sample_parameters(key=subk, n_particles=n_particles, n_vars=self.n_vars)
 
         return z, theta
+    
+
+    def _sample_intial_component_particles(self, *, key, n_components, n_particles, n_dim=None):
+        """
+        Samples random particles to initialize SVGD components
+
+        Args:
+            key (ndarray): rng key
+            n_components (int): number of components in mixture model
+            n_particles (int): number of particles inferred per component
+            n_dim (int): size of latent dimension :math:`k`. Defaults to ``n_vars``, s.t. :math:`k = d`
+
+        Returns:
+            batch of latent tensors ``[n_components, n_particles, d, k, 2]``
+        """
+         # default full rank
+        if n_dim is None:
+            n_dim = self.n_vars
+        
+        # sample particles for all components
+        key, *batch_subk = random.split(key, n_components+1)
+        q_z, q_theta = vmap(self._sample_initial_random_particles, (0, None, None), 0)(jnp.array(batch_subk),
+                                                                                       n_particles,
+                                                                                       n_dim)
+        
+        return q_z, q_theta
 
 
-    def _f_kernel(self, x_latent, x_theta, y_latent, y_theta):
+     def _f_kernel(self, x_latent, x_theta, y_latent, y_theta):
         """
         Evaluates kernel
 
@@ -251,6 +273,7 @@ class JointDiBS(DiBS):
         # average and negate (for optimizer)
         return - (weighted_gradient_ascent + repulsion).mean(axis=0)
 
+    
     def _parallel_update_z(self, *args):
         """
         Vectorizes :func:`~dibs.inference.JointDiBS._z_update`
@@ -307,7 +330,7 @@ class JointDiBS(DiBS):
         return vmap(self._theta_update, (0, 0, 1, None, None, None), 0)(*args)
 
 
-    def _svgd_step(self, t, opt_state_z, opt_state_theta, key, sf_baseline):
+    def _svgd_step(self, t, c, opt_state_z, opt_state_theta, key, sf_baseline, E_k):
         """
         Performs a single SVGD step in the DiBS framework, updating all :math:`(Z, \\Theta)` particles jointly.
 
@@ -322,25 +345,25 @@ class JointDiBS(DiBS):
 
         Returns:
             the updated inputs ``opt_state_z``, ``opt_state_theta``, ``key``, ``sf_baseline``
-        """
-
+        """    
         z = self.get_params(opt_state_z)  # [n_particles, d, k, 2]
         theta = self.get_params(opt_state_theta)  # PyTree with `n_particles` leading dim
         n_particles = z.shape[0]
 
-        # d/dtheta log p(theta, D | z)
+        # d/dtheta log p(theta, D | z, c)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dtheta_log_prob = self.eltwise_grad_theta_likelihood(z, theta, t, jnp.array(batch_subk))
+        dtheta_log_prob = self.eltwise_grad_theta_likelihood(c, z, theta, t, jnp.array(batch_subk), E_k)
 
-        # d/dz log p(theta, D | z)
+        # d/dz log p(theta, D | z, c)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(z, theta, sf_baseline, t, jnp.array(batch_subk))
+        dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(c, z, theta, sf_baseline, t,
+                                                                        jnp.array(batch_subk), E_k)
 
         # d/dz log p(z) (acyclicity)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t)
+        dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k)
 
-        # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z)
+        # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood
 
         # k((z, theta), (z, theta)) for all particles
@@ -355,7 +378,7 @@ class JointDiBS(DiBS):
         opt_state_z = self.opt_update(t, phi_z, opt_state_z)
         opt_state_theta = self.opt_update(t, phi_theta, opt_state_theta)
 
-        return opt_state_z, opt_state_theta, key, sf_baseline
+        return c, opt_state_z, opt_state_theta, key, sf_baseline, E_k
 
 
     # this is the crucial @jit
@@ -364,10 +387,10 @@ class JointDiBS(DiBS):
         return jax.lax.fori_loop(start, start + n_steps, lambda i, args: self._svgd_step(i, *args), init)
 
 
-    def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None):
+    def _sample_component(self, t, steps, key, c, init_z, init_theta, sf_baseline, E_k):
         """
-        Use SVGD with DiBS to sample ``n_particles`` particles :math:`(G, \\Theta)` from the joint posterior
-        :math:`p(G, \\Theta | D)` as defined by the BN model ``self.likelihood_model``
+        Use SVGD with DiBS to sample ``n_particles`` particles :math:`(G, \\Theta)` from the joint posterior 
+        of one component :math:`p(G, \\Theta | D)` as defined by the BN model ``self.likelihood_model``
 
         Arguments:
             key (ndarray): prng key
@@ -377,22 +400,15 @@ class JointDiBS(DiBS):
                 with :math:`U, V \\in \\mathbb{R}^{k \\times d}`. Default is ``n_vars``
             callback: function to be called every ``callback_every`` steps of SVGD.
             callback_every: if ``None``, ``callback`` is only called after particle updates have finished
+            c (ndarray): responsibilities of shape ``[n_observations, 1]``
+            init_z (ndarray): latent :math:`Z` of component particles; contains ``[n_particles, d, k, 2]``
 
         Returns:
             tuple of shape (``[n_particles, n_vars, n_vars]``, ``PyTree``) where ``PyTree`` has leading dimension ``n_particles``:
             batch of samples :math:`G, \\Theta \\sim p(G, \\Theta | D)`
 
         """
-
-        # randomly sample initial particles
-        key, subk = random.split(key)
-        init_z, init_theta = self._sample_initial_random_particles(key=subk, n_particles=n_particles,
-                                                                   n_dim=n_dim_particles)
-
-        # initialize score function baseline (one for each particle)
         n_particles, _, n_dim, _ = init_z.shape
-        sf_baseline = jnp.zeros(n_particles)
-
         if self.latent_prior_std is None:
             self.latent_prior_std = 1.0 / jnp.sqrt(n_dim)
 
@@ -401,36 +417,84 @@ class JointDiBS(DiBS):
         self.get_params = jit(get_params)
         opt_state_z = opt_init(init_z)
         opt_state_theta = opt_init(init_theta)
-
+        
         """Execute particle update steps for all particles in parallel using `vmap` functions"""
         # faster if for-loop is functionally pure and compiled, so only interrupt for callback
-        callback_every = callback_every or steps
-        for t in (range(0, steps, callback_every) if steps else range(0)):
-
-            # perform sequence of SVGD steps
-            opt_state_z, opt_state_theta, key, sf_baseline = self._svgd_loop(t, callback_every,
-                                                                             (opt_state_z, opt_state_theta, key,
-                                                                              sf_baseline))
-
-            # callback
-            if callback:
-                z = self.get_params(opt_state_z)
-                theta = self.get_params(opt_state_theta)
-                callback(
-                    dibs=self,
-                    t=t + callback_every,
-                    zs=z,
-                    thetas=theta,
-                )
-
+        c, opt_state_z, opt_state_theta, key, sf_baseline, E_k = self._svgd_loop(t, steps,
+                                                                                (c, 
+                                                                                 opt_state_z,
+                                                                                 opt_state_theta,
+                                                                                 key,
+                                                                                 sf_baseline,
+                                                                                 E_k))
+        
         # retrieve transported particles
         z_final = jax.device_get(self.get_params(opt_state_z))
         theta_final = jax.device_get(self.get_params(opt_state_theta))
 
-        # as alpha is large, we can convert the latents Z to their corresponding graphs G
-        g_final = self.particle_to_g_lim(z_final)
-        return g_final, theta_final
+        return z_final, theta_final, sf_baseline
+    
 
+    # Update SVGD approximations across components
+    def _compwise_sample_component(self, t, steps, subkeys, q_c, q_z, q_theta, sf_baselines, E):
+        return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, q_c, q_z, q_theta, sf_baselines, E)
+    
+    
+    def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None,
+               q_c, init_q_z, init_q_theta, init_sf_baselines, E):
+        """
+        Use SVGD with DiBMS to sample ``[n_components, n_particles]`` particles.
+
+        Arguments:
+            key (ndarray): prng key
+            n_particles (int): number of particles to sample
+            steps (int): number of SVGD steps performed
+            n_dim_particles (int): latent dimensionality :math:`k` of particles :math:`Z = \{ U, V \}`
+                with :math:`U, V \\in \\mathbb{R}^{k \\times d}`. Default is ``n_vars``
+            callback: function to be called every ``callback_every`` steps of SVGD.
+            callback_every: if ``None``, ``callback`` is only called after particle updates have finished
+            q_c (ndarray): array of shape ```[x.shape[0], n_components]``` for responsibilities of components w.r.t. datapoints
+
+        Returns:
+            tuple of shape (``[n_particles, n_vars, n_vars]``, ``PyTree``) where ``PyTree`` has leading dimension ``n_particles``:
+            batch of samples :math:`G, \\Theta \\sim p(G, \\Theta | D)`
+
+        """
+        # number of columns in responsibility matrix determines number of components
+        n_components = q_c.shape[1]        
+        q_z = init_q_z
+        q_theta = init_q_theta
+        sf_baselines = init_sf_baselines
+        
+        # perform sequence of SVGD steps for each component
+        callback_every = callback_every or steps
+        for t in (range(0, steps, callback_every) if steps else range(0)):
+            key, *batch_subk = random.split(key, n_components+1)
+            q_z, q_theta, sf_baselines = self._compwise_sample_component(t, callback_every,
+                                                                         subkeys=jnp.array(batch_subk),
+                                                                         q_c=q_c, 
+                                                                         q_z=q_z, 
+                                                                         q_theta=q_theta,
+                                                                         sf_baselines=sf_baselines,
+                                                                         E=E)
+            
+            if callback:
+                for k in range(n_components):
+                    callback(dibs=self,
+                             t=t+callback_every,
+                             k=k+1,
+                             zs=q_z[k],
+                             thetas=q_theta[k],
+                             E_k=E[k],
+                             ipython=True if k == 0 else False)
+
+        
+        return q_z, q_theta, sf_baselines
+    
+    
+    #
+    # Getters
+    #
 
     def get_empirical(self, g, theta):
         """
