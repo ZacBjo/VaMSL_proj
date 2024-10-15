@@ -1,0 +1,2 @@
+class VaMSL(JointDiBS):
+    pass
