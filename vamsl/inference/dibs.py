@@ -5,11 +5,11 @@ from jax.nn import sigmoid, log_sigmoid
 import jax.lax as lax
 from jax.tree_util import tree_map
 
-from dibs.graph_utils import acyclic_constr_nograd
-from dibs.utils.func import expand_by, zero_diagonal
+from vamsl.graph_utils import acyclic_constr_nograd
+from vamsl.utils.func import expand_by, zero_diagonal
 
 
-class DiBS:
+class MixtureDiBS:
     """
     This class implements the backbone for DiBS, i.e. all gradient estimators and sampling
     components. Any inference method in the DiBS framework should inherit from this class.
@@ -77,9 +77,10 @@ class DiBS:
         self.latent_prior_std = latent_prior_std
         self.verbose = verbose
 
-    """
-    Backbone functionality
-    """
+        
+    #
+    # Backbone functionality
+    #
 
     def particle_to_g_lim(self, z):
         """
@@ -117,6 +118,7 @@ class DiBS:
 
         # mask diagonal since it is explicitly not modeled
         return zero_diagonal(g_samples)
+    
 
     def particle_to_soft_graph(self, z, eps, t):
         """
@@ -160,10 +162,10 @@ class DiBS:
         # mask diagonal since it is explicitly not modeled
         return zero_diagonal(hard_graph)
 
-
-    """
-    Generative graph model p(G | Z)
-    """
+    
+    #
+    # Generative graph model p(G | Z)
+    #
 
     def edge_probs(self, z, t):
         """
@@ -247,12 +249,11 @@ class DiBS:
         return vmap(dz_latent_log_prob, (0, None, None), 0)(gs, single_z, t)
 
 
+    #
+    # Estimators for scores of log p(theta, D | Z) 
+    #
 
-    """
-    Estimators for scores of log p(theta, D | Z) 
-    """
-
-    def eltwise_log_joint_prob(self, gs, single_theta, rng):
+    def eltwise_log_joint_prob(self, gs, single_theta, c, rng):
         """
         Joint likelihood :math:`\\log p(\\Theta, D | G)` batched over samples of :math:`G`
 
@@ -264,11 +265,10 @@ class DiBS:
         Returns:
             batch of logprobs of shape ``[n_graphs, ]``
         """
+        return vmap(self.log_joint_prob, (0, None, None, None, None, None), 0)(gs, single_theta, self.x, c, 
+                                                                               self.interv_mask, rng)
 
-        return vmap(self.log_joint_prob, (0, None, None, None, None), 0)(gs, single_theta, self.x, self.interv_mask,
-                                                                         rng)
-
-    def log_joint_prob_soft(self, single_z, single_theta, eps, t, subk):
+    def log_joint_prob_soft(self, single_z, single_theta, c, eps, t, subk, E_k):
         """
         This is the composition of :math:`\\log p(\\Theta, D | G) `
         and :math:`G(Z, U)`  (Gumbel-softmax graph sample given :math:`Z`)
@@ -284,15 +284,16 @@ class DiBS:
             logprob of shape ``[1, ]``
 
         """
-        soft_g_sample = self.particle_to_soft_graph(single_z, eps, t)
-        return self.log_joint_prob(soft_g_sample, single_theta, self.x, self.interv_mask, subk)
+        soft_g_sample = self.particle_to_soft_graph(single_z, eps, t, E_k)
+        
+        return self.log_joint_prob(soft_g_sample, single_theta, self.x, c, self.interv_mask, subk)
 
     #
     # Estimators for score d/dZ log p(theta, D | Z)
     # (i.e. w.r.t the latent embeddings Z for graph G)
     #
 
-    def eltwise_grad_z_likelihood(self, zs, thetas, baselines, t, subkeys):
+    def eltwise_grad_z_likelihood(self, cs, zs, thetas, baselines, t, subkeys, E_k):
         """
         Computes batch of estimators for score :math:`\\nabla_Z \\log p(\\Theta, D | Z)`
         Selects corresponding estimator used for the term :math:`\\nabla_Z E_{p(G|Z)}[ p(\\Theta, D | G) ]`
@@ -306,93 +307,16 @@ class DiBS:
         Returns:
             tuple batch of (gradient estimates, baselines) of shapes ``[n_particles, d, k, 2], [n_particles, ]``
         """
-
-        # select the chosen gradient estimator
-        if self.grad_estimator_z == 'score':
-            grad_z_likelihood = self.grad_z_likelihood_score_function
-
-        elif self.grad_estimator_z == 'reparam':
+        if self.grad_estimator_z == 'reparam':
             grad_z_likelihood = self.grad_z_likelihood_gumbel
-
+        
         else:
             raise ValueError(f'Unknown gradient estimator `{self.grad_estimator_z}`')
-
-        # vmap
-        return vmap(grad_z_likelihood, (0, 0, 0, None, 0), (0, 0))(zs, thetas, baselines, t, subkeys)
-
+        
+        return vmap(grad_z_likelihood, (None, 0, 0, 0, None, 0, None), (0, 0))(cs, zs, thetas, baselines, t, subkeys, E_k)
 
 
-    def grad_z_likelihood_score_function(self, single_z, single_theta, single_sf_baseline, t, subk):
-        """
-        Score function estimator (aka REINFORCE) for the score :math:`\\nabla_Z \\log p(\\Theta, D | Z)`
-        Uses the same :math:`G \\sim p(G | Z)` samples for expectations in numerator and denominator.
-
-        This does not use :math:`\\nabla_G \\log p(\\Theta, D | G)` and is hence applicable when
-        the gradient w.r.t. the adjacency matrix is not defined (as e.g. for the BGe score).
-
-        Args:
-            single_z (ndarray): single latent tensor ``[d, k, 2]``
-            single_theta (Any): single parameter PyTree
-            single_sf_baseline (ndarray): ``[1, ]``
-            t (int): step
-            subk (ndarray): rng key
-
-        Returns:
-            tuple of gradient, baseline  ``[d, k, 2], [1, ]``
-
-        """
-
-        # [d, d]
-        p = self.edge_probs(single_z, t)
-        n_vars, n_dim = single_z.shape[0:2]
-
-        # [n_grad_mc_samples, d, d]
-        subk, subk_ = random.split(subk)
-        g_samples = self.sample_g(p, subk_, self.n_grad_mc_samples)
-
-        # same MC samples for numerator and denominator
-        n_mc_numerator = self.n_grad_mc_samples
-        n_mc_denominator = self.n_grad_mc_samples
-
-        # [n_grad_mc_samples, ]
-        subk, subk_ = random.split(subk)
-        logprobs_numerator = self.eltwise_log_joint_prob(g_samples, single_theta, subk_)
-        logprobs_denominator = logprobs_numerator
-
-        # variance_reduction
-        logprobs_numerator_adjusted = lax.cond(
-            self.score_function_baseline <= 0.0,
-            lambda _: logprobs_numerator,
-            lambda _: logprobs_numerator - single_sf_baseline,
-            operand=None)
-
-        # [d * k * 2, n_grad_mc_samples]
-        grad_z = self.eltwise_grad_latent_log_prob(g_samples, single_z, t) \
-            .reshape(self.n_grad_mc_samples, n_vars * n_dim * 2) \
-            .transpose((1, 0))
-
-        # stable computation of exp/log/divide
-        # [d * k * 2, ]  [d * k * 2, ]
-        log_numerator, sign = logsumexp(a=logprobs_numerator_adjusted, b=grad_z, axis=1, return_sign=True)
-
-        # []
-        log_denominator = logsumexp(logprobs_denominator, axis=0)
-
-        # [d * k * 2, ]
-        stable_sf_grad = sign * jnp.exp(log_numerator - jnp.log(n_mc_numerator) - log_denominator + jnp.log(n_mc_denominator))
-
-        # [d, k, 2]
-        stable_sf_grad_shaped = stable_sf_grad.reshape(n_vars, n_dim, 2)
-
-        # update baseline
-        single_sf_baseline = (self.score_function_baseline * logprobs_numerator.mean(0) +
-                             (1 - self.score_function_baseline) * single_sf_baseline)
-
-        return stable_sf_grad_shaped, single_sf_baseline
-
-
-
-    def grad_z_likelihood_gumbel(self, single_z, single_theta, single_sf_baseline, t, subk):
+    def grad_z_likelihood_gumbel(self, cs, single_z, single_theta, single_sf_baseline, t, subk, E_k):
         """
         Reparameterization estimator for the score  :math:`\\nabla_Z \\log p(\\Theta, D | Z)`
         sing the Gumbel-softmax / concrete distribution reparameterization trick.
@@ -436,7 +360,7 @@ class DiBS:
         subk, subk_ = random.split(subk)
 
         # [d, k, 2], [d, d], [n_grad_mc_samples, d, d], [1,], [1,] -> [n_grad_mc_samples]
-        logprobs_numerator = vmap(self.log_joint_prob_soft, (None, None, 0, None, None), 0)(single_z, single_theta, eps, t, subk_)
+        logprobs_numerator = vmap(self.log_joint_prob_soft, (None, None, None, 0, None, None, None), 0)(single_z, single_theta, cs, eps, t, subk_, E_k)
         logprobs_denominator = logprobs_numerator
 
         # [n_grad_mc_samples, d, k, 2]
@@ -444,18 +368,22 @@ class DiBS:
         # use the same minibatch of data as for other log prob evaluation (if using minibatching)
 
         # [d, k, 2], [d, d], [n_grad_mc_samples, d, d], [1,], [1,] -> [n_grad_mc_samples, d, k, 2]
-        grad_z = vmap(grad(self.log_joint_prob_soft, 0), (None, None, 0, None, None), 0)(single_z, single_theta, eps, t, subk_)
-
+        grad_z = vmap(grad(self.log_joint_prob_soft, 0), (None, None, None, 0, None, None, None), 0)(single_z, single_theta, cs, eps, t, subk_, E_k)
+            
         # stable computation of exp/log/divide
         # [d, k, 2], [d, k, 2]
         log_numerator, sign = logsumexp(a=logprobs_numerator[:, None, None, None], b=grad_z, axis=0, return_sign=True)
-
+        
+        subk, subk_ = random.split(subk)
+        # [d, k, 2], [d, d], [n_grad_mc_samples, d, d], [1,], [1,] -> [n_grad_mc_samples]
+        #logprobs_denominator = vmap(self.log_joint_prob_soft, (None, None, None, 0, None, None, None), 0)(single_z, single_theta, jnp.ones_like(cs), eps, t, subk_, E_k)
+        
         # []
         log_denominator = logsumexp(logprobs_denominator, axis=0)
-
+        
         # [d, k, 2]
         stable_grad = sign * jnp.exp(log_numerator - jnp.log(n_mc_numerator) - log_denominator + jnp.log(n_mc_denominator))
-
+    
         return stable_grad, single_sf_baseline
 
 
@@ -464,7 +392,7 @@ class DiBS:
     # (i.e. w.r.t the conditional distribution parameters)
     #
 
-    def eltwise_grad_theta_likelihood(self, zs, thetas, t, subkeys):
+    def eltwise_grad_theta_likelihood(self, cs, zs, thetas, t, subkeys, E_k):
         """
         Computes batch of estimators for the score   :math:`\\nabla_{\\Theta} \\log p(\\Theta, D | Z)`,
         i.e. w.r.t the conditional distribution parameters.
@@ -482,10 +410,10 @@ class DiBS:
             batch of gradients in form of ``thetas`` PyTree with ``n_particles`` as leading dim
 
         """
-        return vmap(self.grad_theta_likelihood, (0, 0, None, 0), 0)(zs, thetas, t, subkeys)
+        return vmap(self.grad_theta_likelihood, (None, 0, 0, None, 0, None), 0)(cs, zs, thetas, t, subkeys, E_k)
 
 
-    def grad_theta_likelihood(self, single_z, single_theta, t, subk):
+    def grad_theta_likelihood(self, cs, single_z, single_theta, t, subk, E_k):
         """
         Computes Monte Carlo estimator for the score  :math:`\\nabla_{\\Theta} \\log p(\\Theta, D | Z)`
 
@@ -502,9 +430,8 @@ class DiBS:
             parameter gradient PyTree
 
         """
-
         # [d, d]
-        p = self.edge_probs(single_z, t)
+        p = self.edge_probs(single_z, t, E_k)
 
         # [n_grad_mc_samples, d, d]
         g_samples = self.sample_g(p, subk, self.n_grad_mc_samples)
@@ -515,7 +442,7 @@ class DiBS:
 
         # [n_mc_numerator, ]
         subk, subk_ = random.split(subk)
-        logprobs_numerator = self.eltwise_log_joint_prob(g_samples, single_theta, subk_)
+        logprobs_numerator = self.eltwise_log_joint_prob(g_samples, single_theta, cs, subk_)
         logprobs_denominator = logprobs_numerator
 
         # PyTree  shape of `single_theta` with additional leading dimension [n_mc_numerator, ...]
@@ -523,7 +450,7 @@ class DiBS:
         # use the same minibatch of data as for other log prob evaluation (if using minibatching)
         grad_theta_log_joint_prob = grad(self.log_joint_prob, 1)
         grad_theta = vmap(grad_theta_log_joint_prob,
-                          (0, None, None, None, None), 0)(g_samples, single_theta, self.x, self.interv_mask, subk_)
+                          (0, None, None, None, None, None), 0)(g_samples, single_theta, self.x, cs, self.interv_mask, subk_)
 
         # stable computation of exp/log/divide and PyTree compatible
         # sums over MC graph samples dimension to get MC gradient estimate of theta
@@ -538,7 +465,11 @@ class DiBS:
             lambda leaf_theta:
                 logsumexp(a=expand_by(logprobs_numerator, leaf_theta.ndim - 1), b=leaf_theta, axis=0, return_sign=True)[1],
             grad_theta)
-
+        
+        
+        #subk, subk_ = random.split(subk)
+        #logprobs_denominator = self.eltwise_log_joint_prob(g_samples, single_theta, jnp.ones_like(cs), subk_)
+        
         # []
         log_denominator = logsumexp(logprobs_denominator, axis=0)
 
@@ -551,10 +482,11 @@ class DiBS:
         return stable_grad
 
 
-    """
-    Estimators for score d/dZ log p(Z) 
-    """
-    def constraint_gumbel(self, single_z, single_eps, t):
+    #
+    # Estimators for score d/dZ log p(Z)
+    #
+
+    def constraint_gumbel(self, single_z, single_eps, t, E_k):
         """
         Evaluates continuous acyclicity constraint using
         Gumbel-softmax instead of Bernoulli samples
@@ -568,12 +500,12 @@ class DiBS:
             constraint value of shape ``[1,]``
         """
         n_vars = single_z.shape[0]
-        G = self.particle_to_soft_graph(single_z, single_eps, t)
+        G = self.particle_to_soft_graph(single_z, single_eps, t, E_k)
         h = acyclic_constr_nograd(G, n_vars)
         return h
 
 
-    def grad_constraint_gumbel(self, single_z, key, t):
+    def grad_constraint_gumbel(self, single_z, key, t, E_k):
         """
         Reparameterization estimator for the gradient :math:`\\nabla_Z E_{p(G|Z)} [ h(G) ]`
         where :math:`h` is the acyclicity constraint penalty function.
@@ -595,13 +527,13 @@ class DiBS:
         eps = random.logistic(key, shape=(self.n_acyclicity_mc_samples, n_vars, n_vars))
 
         # [n_mc_samples, d, k, 2]
-        mc_gradient_samples = vmap(grad(self.constraint_gumbel, 0), (None, 0, None), 0)(single_z, eps, t)
+        mc_gradient_samples = vmap(grad(self.constraint_gumbel, 0), (None, 0, None, None), 0)(single_z, eps, t, E_k)
 
         # [d, k, 2]
         return mc_gradient_samples.mean(0)
 
 
-    def log_graph_prior_particle(self, single_z, t):
+    def log_graph_prior_particle(self, single_z, t, E_k):
         """
         Computes :math:`\\log p(G)` component of :math:`\\log p(Z)`,
         i.e. not the contraint or Gaussian prior term, but the DAG belief.
@@ -617,13 +549,13 @@ class DiBS:
             log prior graph probability`\\log p(G_{\\alpha}(Z))`  of shape ``[1,]``
         """
         # [d, d] # masking is done inside `edge_probs`
-        single_soft_g = self.edge_probs(single_z, t)
+        single_soft_g = self.edge_probs(single_z, t, E_k)
 
         # [1, ]
         return self.log_graph_prior(soft_g=single_soft_g)
 
 
-    def eltwise_grad_latent_prior(self, zs, subkeys, t):
+    def eltwise_grad_latent_prior(self, zs, subkeys, t, E_k):
         """
         Computes batch of estimators for the score :math:`\\nabla_Z \\log p(Z)`
         with
@@ -641,23 +573,26 @@ class DiBS:
             batch of gradients of shape ``[n_particles, d, k, 2]``
 
         """
-
         # log f(Z) term
         # [d, k, 2], [1,] -> [d, k, 2]
         grad_log_graph_prior_particle = grad(self.log_graph_prior_particle, 0)
 
         # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
-        grad_prior_z = vmap(grad_log_graph_prior_particle, (0, None), 0)(zs, t)
+        grad_prior_z = vmap(grad_log_graph_prior_particle, (0, None, None), 0)(zs, t, E_k)
 
         # constraint term
         # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
-        eltwise_grad_constraint = vmap(self.grad_constraint_gumbel, (0, 0, None), 0)(zs, subkeys, t)
+        eltwise_grad_constraint = vmap(self.grad_constraint_gumbel, (0, 0, None, None), 0)(zs, subkeys, t, E_k)
 
         return - self.beta(t) * eltwise_grad_constraint \
                - zs / (self.latent_prior_std ** 2.0) \
                + grad_prior_z
 
-
+    
+    #
+    # Utility
+    #
+    
     def visualize_callback(self, ipython=True, save_path=None):
         """Returns callback function for visualization of particles during inference updates
 
@@ -676,13 +611,15 @@ class DiBS:
 
         def callback(**kwargs):
             zs = kwargs["zs"]
-            gs = kwargs["dibs"].particle_to_g_lim(zs)
-            probs = kwargs["dibs"].edge_probs(zs, kwargs["t"])
+            gs = kwargs["dibs"].particle_to_g_lim(zs, kwargs["E_k"])
+            probs = kwargs["dibs"].edge_probs(zs, kwargs["t"], kwargs["E_k"])
+            ipython = kwargs["ipython"]
             if ipython:
                 display.clear_output(wait=True)
             visualize(probs, save_path=save_path, t=kwargs["t"], show=True)
             print(
-                f'iteration {kwargs["t"]:6d}'
+                f'Component {kwargs["k"]:3d}'
+                f' | iteration {kwargs["t"]:3d}'
                 f' | alpha {self.alpha(kwargs["t"]):6.1f}'
                 f' | beta {self.beta(kwargs["t"]):6.1f}'
                 f' | #cyclic {(constraint(gs, self.n_vars) > 0).sum().item():3d}'

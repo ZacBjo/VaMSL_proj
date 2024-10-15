@@ -1,3 +1,3 @@
-from .dibs import DiBS
-from .svgd import JointDiBS
+from .dibs import MixtureDiBS
+from .svgd import MixtureJointDiBS
 from .vamsl import VaMSL
