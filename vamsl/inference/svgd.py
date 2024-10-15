@@ -174,7 +174,7 @@ class MixtureJointDiBS(MixtureDiBS):
         return q_z, q_theta
 
 
-     def _f_kernel(self, x_latent, x_theta, y_latent, y_theta):
+    def _f_kernel(self, x_latent, x_theta, y_latent, y_theta):
         """
         Evaluates kernel
 

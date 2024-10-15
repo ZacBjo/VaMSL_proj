@@ -604,8 +604,8 @@ class MixtureDiBS:
             callback
         """
 
-        from dibs.utils.visualize import visualize
-        from dibs.graph_utils import elwise_acyclic_constr_nograd as constraint
+        from vamsl.utils.visualize import visualize
+        from vamsl.graph_utils import elwise_acyclic_constr_nograd as constraint
         if ipython:
             from IPython import display
 

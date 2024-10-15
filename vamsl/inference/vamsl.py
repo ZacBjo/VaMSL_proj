@@ -6,7 +6,7 @@ from jax.nn import sigmoid, log_sigmoid
 jax.config.update("jax_debug_nans", True)
 
 from vamsl.inference import MixtureJointDiBS
-from vamsl.metrics import ParticleDistribution, ave_log_likelihood, neg_ave_log_likelihood 
+from vamsl.metrics import ParticleDistribution, neg_ave_log_likelihood 
 from vamsl.kernel import AdditiveFrobeniusSEKernel, JointAdditiveFrobeniusSEKernel
 from vamsl.utils.func import stable_softmax
 from vamsl.graph_utils import elwise_acyclic_constr_nograd
@@ -99,7 +99,7 @@ class VaMSL(MixtureJointDiBS):
         self.q_z, self.q_theta, self.sf_baselines = self.sample(key=key, n_particles=self.n_particles, 
                                                                 steps=steps, callback=callback, 
                                                                 callback_every=callback_every, 
-                                                                q_c=self.q_c, init_model=False,
+                                                                q_c=self.q_c,
                                                                 init_q_z=self.q_z, 
                                                                 init_q_theta=self.q_theta, 
                                                                 init_sf_baselines=self.sf_baselines,
@@ -118,7 +118,7 @@ class VaMSL(MixtureJointDiBS):
         return np.log(pi_k) + expected_log_lik
     
     
-    def update_responsibilities(self):
+    def update_responsibilities_and_weights(self):
         N = self.x.shape[0]
         K = self.q_c.shape[1]
         
@@ -161,7 +161,9 @@ class VaMSL(MixtureJointDiBS):
         pass
     
     
-    ## Getters and setters
+    #
+    # Getters and setters
+    #
     
     def get_posteriors(self):
         return self.q_z, self.q_theta, self.q_c, self.q_pi
@@ -169,9 +171,11 @@ class VaMSL(MixtureJointDiBS):
     
     def set_E(self, E):
         self.E = E
-        
-
-    ## Overriding functions
+    
+    
+    #
+    #Overriding functions
+    #
     
     def particle_to_g_lim(self, z, E_k):
         """
