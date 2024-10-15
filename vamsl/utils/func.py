@@ -143,3 +143,12 @@ def _slogdet_jax(m, parents):
     mask = jnp.einsum('...i,...j->...ij', parents, parents)
     submat = mask * m + (1 - mask) * jnp.eye(n_vars)
     return jnp.linalg.slogdet(submat)[1]
+
+
+def stable_softmax(log_liks):
+    z = log_liks - jnp.max(log_liks)
+    numerator = jnp.exp(z)
+    denominator = jnp.sum(numerator)
+    softmax = numerator/denominator
+
+    return softmax
