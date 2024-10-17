@@ -7,6 +7,9 @@ from jax import jit, vmap, random, grad
 from jax.tree_util import tree_map
 from jax.scipy.special import logsumexp
 from jax.example_libraries import optimizers
+jax.config.update("jax_debug_nans", True)
+from jax import debug
+from jax.scipy.special import logsumexp
 
 from vamsl.inference.dibs import MixtureDiBS
 from vamsl.kernel import AdditiveFrobeniusSEKernel, JointAdditiveFrobeniusSEKernel
@@ -350,22 +353,25 @@ class MixtureJointDiBS(MixtureDiBS):
         theta = self.get_params(opt_state_theta)  # PyTree with `n_particles` leading dim
         n_particles = z.shape[0]
 
-        # d/dtheta log p(theta, D | z, c)
+        # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dtheta_log_prob = self.eltwise_grad_theta_likelihood(c, z, theta, t, jnp.array(batch_subk), E_k)
-
-        # d/dz log p(theta, D | z, c)
+        dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, z, theta, t, 
+                                                             jnp.array(batch_subk), E_k)
+        
+        # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(c, z, theta, sf_baseline, t,
-                                                                        jnp.array(batch_subk), E_k)
-
+        dz_log_likelihood, check_sf_baselines = self.eltwise_grad_z_likelihood(self.x, z, theta,
+                                                                                sf_baseline, t,
+                                                                                jnp.array(batch_subk), 
+                                                                                E_k)
+        
         # d/dz log p(z) (acyclicity)
         key, *batch_subk = random.split(key, n_particles + 1)
         dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k)
 
         # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood
-
+        
         # k((z, theta), (z, theta)) for all particles
         kxx = self._f_kernel_mat(z, theta, z, theta)
 
@@ -437,7 +443,8 @@ class MixtureJointDiBS(MixtureDiBS):
 
     # Update SVGD approximations across components
     def _compwise_sample_component(self, t, steps, subkeys, q_c, q_z, q_theta, sf_baselines, E):
-        return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, q_c, q_z, q_theta, sf_baselines, E)
+        return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, q_c, q_z, 
+                                                                            q_theta, sf_baselines, E)
     
     
     def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None,
