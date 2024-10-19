@@ -355,15 +355,11 @@ class MixtureJointDiBS(MixtureDiBS):
 
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, z, theta, t, 
-                                                             jnp.array(batch_subk), E_k)
+        dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
         
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_likelihood, check_sf_baselines = self.eltwise_grad_z_likelihood(self.x, z, theta,
-                                                                                sf_baseline, t,
-                                                                                jnp.array(batch_subk), 
-                                                                                E_k)
+        dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
         
         # d/dz log p(z) (acyclicity)
         key, *batch_subk = random.split(key, n_particles + 1)

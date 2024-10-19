@@ -256,7 +256,7 @@ class MixtureDiBS:
     # Estimators for scores of log p(theta, x | Z) 
     #
 
-    def eltwise_log_joint_prob(self, gs, single_theta, x, rng):
+    def eltwise_log_joint_prob(self, gs, single_theta, x, c, rng):
         """
         Joint likelihood :math:`\\log p(\\Theta, D | G)` batched over samples of :math:`G`
 
@@ -268,10 +268,10 @@ class MixtureDiBS:
         Returns:
             batch of logprobs of shape ``[n_graphs, ]``
         """
-        return vmap(self.log_joint_prob, (0, None, None, None, None), 0)(gs, single_theta, x, self.interv_mask, rng)
+        return vmap(self.log_joint_prob, (0, None, None, None, None, None), 0)(gs, single_theta, x, c, self.interv_mask, rng)
 
     
-    def log_joint_prob_soft(self, single_z, single_theta, x, eps, t, subk, E_k):
+    def log_joint_prob_soft(self, single_z, single_theta, x, c, eps, t, subk, E_k):
         """
         This is the composition of :math:`\\log p(\\Theta, D | G) `
         and :math:`G(Z, U)`  (Gumbel-softmax graph sample given :math:`Z`)
@@ -289,7 +289,7 @@ class MixtureDiBS:
         """
         soft_g_sample = self.particle_to_soft_graph(single_z, eps, t, E_k)
         
-        return self.log_joint_prob(soft_g_sample, single_theta, x, self.interv_mask, subk)
+        return self.log_joint_prob(soft_g_sample, single_theta, x, c, self.interv_mask, subk)
     
 
     #
@@ -297,7 +297,7 @@ class MixtureDiBS:
     # (i.e. w.r.t the latent embeddings Z for graph G)
     #
 
-    def eltwise_grad_z_likelihood(self, x, zs, thetas, baselines, t, subkeys, E_k):
+    def eltwise_grad_z_likelihood(self, x, c, zs, thetas, baselines, t, subkeys, E_k):
         """
         Computes batch of estimators for score :math:`\\nabla_Z \\log p(\\Theta, D | Z)`
         Selects corresponding estimator used for the term :math:`\\nabla_Z E_{p(G|Z)}[ p(\\Theta, D | G) ]`
@@ -317,10 +317,10 @@ class MixtureDiBS:
         else:
             raise ValueError(f'Unknown gradient estimator `{self.grad_estimator_z}`')
         
-        return vmap(grad_z_likelihood, ( 0, 0, 0, None, None, 0, None), (0, 0))(zs, thetas, baselines, x, t, subkeys, E_k)
+        return vmap(grad_z_likelihood, ( 0, 0, 0, None, None, None, 0, None), (0, 0))(zs, thetas, baselines, x, c, t, subkeys, E_k)
 
 
-    def grad_z_likelihood_gumbel(self, single_z, single_theta, single_sf_baseline, x, t, subk, E_k):
+    def grad_z_likelihood_gumbel(self, single_z, single_theta, single_sf_baseline, x, c, t, subk, E_k):
         """
         Reparameterization estimator for the score  :math:`\\nabla_Z \\log p(\\Theta, D | Z)`
         sing the Gumbel-softmax / concrete distribution reparameterization trick.
@@ -363,17 +363,17 @@ class MixtureDiBS:
 
         # [d, k, 2], [d, d], [n_grad_mc_samples, d, d], [1,], [1,] -> [n_grad_mc_samples]
         logprobs_numerator = vmap(self.log_joint_prob_soft, 
-                                  (None, None, None, 0, None, None, None), 0)(single_z, single_theta, x, 
+                                  (None, None, None, None, 0, None, None, None), 0)(single_z, single_theta, x, c, 
                                                                               eps, t, subk_, E_k)
         logprobs_denominator = logprobs_numerator
 
         # [n_grad_mc_samples, d, k, 2]
-        # d/dx log p(theta, D | G(x, eps)) for a batch of `eps` samples
+        # d/dZ log p(theta, x | G(Z, eps)) for a batch of `eps` samples
         # use the same minibatch of data as for other log prob evaluation (if using minibatching)
 
         # [d, k, 2], [d, d], [n_grad_mc_samples, d, d], [1,], [1,] -> [n_grad_mc_samples, d, k, 2]
         grad_z = vmap(grad(self.log_joint_prob_soft, 0), 
-                      (None, None, None, 0, None, None, None), 0)(single_z, single_theta, x, eps, t, subk_, E_k)
+                      (None, None, None, None, 0, None, None, None), 0)(single_z, single_theta, x, c, eps, t, subk_, E_k)
             
         # stable computation of exp/log/divide
         # [d, k, 2], [d, k, 2]
@@ -389,11 +389,11 @@ class MixtureDiBS:
     
     
     #
-    # Estimators for score d/dtheta log p(theta, D | Z)
+    # Estimators for score d/dtheta log p(theta, x | Z)
     # (i.e. w.r.t the conditional distribution parameters)
     #
 
-    def eltwise_grad_theta_likelihood(self, x, zs, thetas, t, subkeys, E_k):
+    def eltwise_grad_theta_likelihood(self, x, c, zs, thetas, t, subkeys, E_k):
         """
         Computes batch of estimators for the score   :math:`\\nabla_{\\Theta} \\log p(\\Theta, D | Z)`,
         i.e. w.r.t the conditional distribution parameters.
@@ -411,10 +411,10 @@ class MixtureDiBS:
             batch of gradients in form of ``thetas`` PyTree with ``n_particles`` as leading dim
 
         """
-        return vmap(self.grad_theta_likelihood, (0, 0, None, None, 0, None), 0)(zs, thetas, x, t, subkeys, E_k)
+        return vmap(self.grad_theta_likelihood, (0, 0, None, None, None, 0, None), 0)(zs, thetas, x, c, t, subkeys, E_k)
 
 
-    def grad_theta_likelihood(self, single_z, single_theta, x, t, subk, E_k):
+    def grad_theta_likelihood(self, single_z, single_theta, x, c, t, subk, E_k):
         """
         Computes Monte Carlo estimator for the score  :math:`\\nabla_{\\Theta} \\log p(\\Theta, D | Z)`
 
@@ -443,14 +443,14 @@ class MixtureDiBS:
 
         # [n_mc_numerator, ]
         subk, subk_ = random.split(subk)
-        logprobs_numerator = self.eltwise_log_joint_prob(g_samples, single_theta, x, subk_)
+        logprobs_numerator = self.eltwise_log_joint_prob(g_samples, single_theta, x, c, subk_)
         logprobs_denominator = logprobs_numerator
 
         # PyTree  shape of `single_theta` with additional leading dimension [n_mc_numerator, ...]
         # d/dtheta log p(theta, D | G) for a batch of G samples
         # use the same minibatch of data as for other log prob evaluation (if using minibatching)
         grad_theta_log_joint_prob = grad(self.log_joint_prob, 1)
-        grad_theta = vmap(grad_theta_log_joint_prob, (0, None, None, None, None), 0)(g_samples, single_theta, x, self.interv_mask, subk_)
+        grad_theta = vmap(grad_theta_log_joint_prob, (0, None, None, None, None, None), 0)(g_samples, single_theta, x, c, self.interv_mask, subk_)
 
         # stable computation of exp/log/divide and PyTree compatible
         # sums over MC graph samples dimension to get MC gradient estimate of theta
