@@ -3,6 +3,8 @@ from jax import random, vmap
 from jax.scipy.stats import norm as jax_normal
 from jax.scipy.special import gammaln
 from vamsl.utils.func import _slogdet_jax
+from jax import debug
+from jax.scipy.special import logsumexp
 
 
 class MixtureLinearGaussian:
@@ -140,12 +142,11 @@ class MixtureLinearGaussian:
         """
         assert x.shape == interv_targets.shape
         
-        # Responsibilities affect all probabilities in graph
         c_mask = c.reshape(-1,1).repeat(x.shape[1], 1)
         assert x.shape == c_mask.shape
-
+        
         # sum scores for all nodes and data
-        return jnp.sum(
+        log_sum =  jnp.sum(
             jnp.where(
                 # [n_observations, n_vars]
                 interv_targets,
@@ -154,7 +155,8 @@ class MixtureLinearGaussian:
                 c_mask * jax_normal.logpdf(x=x, loc=x @ (g * theta), scale=jnp.sqrt(self.obs_noise))
             )
         )
-
+        
+        return log_sum
 
     """
     Distributions used by DiBS for inference:  prior and joint likelihood 

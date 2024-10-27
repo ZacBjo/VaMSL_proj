@@ -1,9 +1,8 @@
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax import vmap
+from jax import vmap, random, grad
 from jax.nn import sigmoid, log_sigmoid
-jax.config.update("jax_debug_nans", True)
 
 from vamsl.inference import MixtureJointDiBS
 from vamsl.metrics import ParticleDistribution, neg_ave_log_likelihood 
@@ -12,6 +11,9 @@ from vamsl.utils.func import stable_softmax
 from vamsl.graph_utils import elwise_acyclic_constr_nograd
 from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.utils.func import expand_by, zero_diagonal
+
+from scipy.optimize import linear_sum_assignment
+
 
 class VaMSL(MixtureJointDiBS):
     def __init__(self, *,
@@ -94,12 +96,30 @@ class VaMSL(MixtureJointDiBS):
         else:
             self.E = jnp.zeros((n_components, self.n_vars, self.n_vars))
 
+            
+
+    def sample_assignments(self, key):
+        # sample assignments based on responsibilities
+        key, *subks = random.split(key, self.q_c.shape[0]+1)
+        make_choices = lambda subks, c_n, q_c: vmap(lambda subk, c_n, q_c_n: random.choice(key=subk, a=c_n, p=q_c_n, axis=0), 
+                                                    (0, None, 0))(subks, c_n, q_c)
+        get_assignments = lambda subk, c_n, q_c: jnp.eye(q_c.shape[1])[make_choices(subk, c_n, q_c)]
+        cs = get_assignments(jnp.array(subks), jnp.arange(self.q_c.shape[1]), self.q_c)
+        
+        assert(cs.shape == self.q_c.shape)
+        
+        return cs
         
     def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None):
+        key, subk = random.split(key)
+        # Sample observation assignments
+        cs = self.sample_assignments(subk)
+        
+        # Sample new variational posteriors for graphs and parameters
         self.q_z, self.q_theta, self.sf_baselines = self.sample(key=key, n_particles=self.n_particles, 
                                                                 steps=steps, callback=callback, 
                                                                 callback_every=callback_every, 
-                                                                q_c=self.q_c,
+                                                                q_c=cs,
                                                                 init_q_z=self.q_z, 
                                                                 init_q_theta=self.q_theta, 
                                                                 init_sf_baselines=self.sf_baselines,
@@ -157,8 +177,36 @@ class VaMSL(MixtureJointDiBS):
         pass
 
     
-    def order_components(self):
-        pass
+    def identify_ordering(self, *, mixture_data):
+        """
+        Identify component indices based on n_componets number of ground truth graphs
+        
+        Args:
+            mixture_data (ndarray): ndarray of shape [n_components, n_observations, n_vars] with data for each component.
+            
+        Outputs:
+            order (array): array of with order of components
+        """
+        # [n_components, n_particles, n_vars, n_vars]
+        component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
+        
+        # Get particle distributions for each component (list comprhension since get_empirical is impure)
+        # [n_components, ParticleDistribution]
+        component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(self.q_c.shape[1])]
+        
+        # expected log lik
+        e_log_lik = lambda dist, x: -neg_ave_log_likelihood(dist=dist,
+                                                            eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
+                                                            x=x)
+        
+        # Calculate log likelihood of all components for data
+        cost_matrix = [[e_log_lik(dist, data) for data in mixture_data] for dist in component_dists]
+        
+        # use Hungaraian algorithm to find optimal allocation
+        assignments = linear_sum_assignment(cost_matrix)
+        
+        # Return list of optimal allocations as order of components
+        return assignments[1]
     
     
     #
@@ -172,6 +220,8 @@ class VaMSL(MixtureJointDiBS):
     def set_E(self, E):
         self.E = E
     
+    def get_E(self):
+        return E
     
     #
     #Overriding functions
