@@ -1,0 +1,39 @@
+import jax.numpy as jnp
+import jax.random as random
+
+class bernoulli_simulator:
+    #
+    #Simple experiment simulator used to simulate outcomes for queries about edge existence.
+    #
+    #An experiment either returns either 1 (indicating existing edge) or 0 (indicating missing edge).
+    #
+    #The experiment is simulated as a Bernoulli trial parametrized by an edge probability. 
+    #The edge probabilities arecalculated using the DiBS method.
+    #
+    #In the terminology of Rainforth et al. (2023). - Modern Bayesian Experimental Design:
+    #The parameter \theta: A [n_var, n_var] matrix of edge probabilities.
+    #The experiment \xi_{ij}: The query whether the edge i -> j exist in the graph.
+    #The outcome y_{ij}: A binary variable y_{ij} \in \{0,1\} idnidcating edge (non-)existence.
+    #The simulator p(y|\theta, \xi_[ij}): A bernoulli trial parametrized by the edge probability \theta_{ij}. 
+    #
+    def __init__(self):
+        pass
+        
+        
+    def get_edge_prob(self, edge_probs, experiment):
+        # An experiment corresponds to asking about a single edge
+        i, j = experiment[0], experiment[1]
+        
+        # Return edge probability 
+        return edge_probs[i,j]
+    
+    
+    def get_experiment_likelihood(self, edge_probs, experiment):
+        return self.get_edge_prob(edge_probs, experiment)
+        
+        
+    def run_experiment(self, key, edge_probs, experiment):
+        # Get edge probability for edge defined by experiment
+        edge_prob = self.get_edge_prob(edge_probs, experiment)
+        
+        return random.bernoulli(key, edge_prob)
