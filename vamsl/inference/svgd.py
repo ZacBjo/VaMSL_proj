@@ -147,7 +147,7 @@ class MixtureJointDiBS(MixtureDiBS):
 
         key, subk = random.split(key)
         theta = self.likelihood_model.sample_parameters(key=subk, n_particles=n_particles, n_vars=self.n_vars)
-
+        
         return z, theta
     
 

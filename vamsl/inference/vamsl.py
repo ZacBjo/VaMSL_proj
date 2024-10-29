@@ -97,7 +97,6 @@ class VaMSL(MixtureJointDiBS):
             self.E = jnp.zeros((n_components, self.n_vars, self.n_vars))
 
             
-
     def sample_assignments(self, key):
         # sample assignments based on responsibilities
         key, *subks = random.split(key, self.q_c.shape[0]+1)
@@ -109,6 +108,7 @@ class VaMSL(MixtureJointDiBS):
         assert(cs.shape == self.q_c.shape)
         
         return cs
+        
         
     def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None):
         key, subk = random.split(key)
@@ -146,13 +146,15 @@ class VaMSL(MixtureJointDiBS):
         # [n_components, n_particles, n_vars, n_vars]
         component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
         
-        # Get particle distributions for each component (list comprhension since get_empirical is impure)
+        # Get particle distributions for each component (list comprehension since get_empirical is impure)
         # [n_components, ParticleDistribution]
         component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(K)]
         
         # Get unnormalized repsonsiibilities for components (list comprehension since component_dists can differ in size)
         # [n_observations, n_components]
-        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_responsibility, (0, None, None))(self.x, component_dists[k], self.q_pi[k]) for k in range(K)]))
+        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_responsibility, (0, None, None))(self.x, 
+                                                                                                              component_dists[k], 
+                                                                                                              self.q_pi[k]) for k in range(K)]))
         
         # Get softmax-normalized component responsibilities
         # [n_observations, n_components]
@@ -174,6 +176,7 @@ class VaMSL(MixtureJointDiBS):
     
     
     def component_classification_accuracy(self, *, component, c_k_targets):
+        # TODO
         pass
 
     
@@ -221,7 +224,7 @@ class VaMSL(MixtureJointDiBS):
         self.E = E
     
     def get_E(self):
-        return E
+        return self.E
     
     #
     #Overriding functions
