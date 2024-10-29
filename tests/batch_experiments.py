@@ -107,9 +107,6 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
     # [n_observations, n_vars]
     x = x_ind[:,0:n_vars]
     
-    # initalize timer
-    dt = 0
-    
     # Randomly initial assignments 
     c = np.zeros((N:=x.shape[0], K:=n_components)) # matrix of assignment to cluster (boolean mask)
     # fill c with random responsibilities
@@ -134,6 +131,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         E = jnp.zeros((n_components, n_vars,n_vars))
     
     # SAMPLE BURN IN POSTERIORS
+    dt = 0 # initalize timer
     for step in range(0, burn_in_steps, int(burn_in_steps/updates)):
         # Elicitation if queries 
         if not n_queries == 0:
@@ -167,7 +165,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         dt += time.time() - t1
         
         
-    # SAMPLE FINAL POSTERIORS 
+    # SAMPLE FINAL POSTERIORS
     # Time of posterior inference
     t1 = time.time()
     # Update to final posteriors q(c) and q(\pi)
@@ -179,7 +177,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
     
     # Return posteriors and experiment data
     return {'gs': ground_truth_graphs, 'thetas': ground_truth_thetas, 'posteriors': vamsl.get_posteriors(), 
-            'E': vamsl.get_E(), 'Indicated_data': x_ind, 'delta_time': dt}
+            'E': vamsl.get_E(), 'indicated_data': x_ind, 'delta_time': dt}
 
 
 def run_experiments(*, seed, n_runs, mixing_rate, n_particles, n_vars, n_observations,
@@ -208,20 +206,22 @@ def run_experiments(*, seed, n_runs, mixing_rate, n_particles, n_vars, n_observa
     key, *subks = random.split(key, n_runs+1)
     
     # func for running one replication
-    exp_rep = lambda subk: experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate)
+    def run_replicate(subk):
+        return experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate)
     
-    #with concurrent.futures.ThreadPoolExecutor() as executor:
-     #   res = executor.map(exp_rep , jnp.array(subks))
-        
-    # Parallel calculation using multiprocessing
-    with multiprocessing.Pool() as pool:
-        res = pool.map(exp_rep, jnp.array(subks))
-        
-    return res
-    #return [experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate) for subk in jnp.array(subks)]
+    # Run replications
+    return [run_replicate(subk) for subk in jnp.array(subks)]
 
 
 def __main__(*, exp_dict_file, exp_num):
+    """
+    Access experiment settings and run replications. 
+    Pickles list of dictionaries with expreiment replicate results in 'results' subfolder.
+    
+    Args:
+        exp_dict_file (str): JSON file containing list of dictionaries with experiment settings.
+        exp_num (int): index of experiment settings.
+    """
     # Get experiment variable dictionary from expriment index
     with open(exp_dict_file, "r") as read_file:
         exp_dict = json.load(read_file)[exp_num]
