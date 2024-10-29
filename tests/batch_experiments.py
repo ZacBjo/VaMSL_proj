@@ -13,7 +13,8 @@ import sys, ast
 import time 
 import pickle
 import json
-
+import concurrent.futures
+import multiprocessing
 
 def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_type, struct_eq_type):
     """
@@ -206,22 +207,18 @@ def run_experiments(*, seed, n_runs, mixing_rate, n_particles, n_vars, n_observa
     # Generate PRNG subkey for each experiment replication
     key, *subks = random.split(key, n_runs+1)
     
-    """
-    # Run experiments
-    return vmap(experiment_replication, (0, None, None, None, None, None, None, None, None, None, None, None))(jnp.array(subks), 
-                                                                                                                n_particles, 
-                                                                                                                n_vars, 
-                                                                                                                n_observations,
-                                                                                                                graph_type, 
-                                                                                                                n_queries, 
-                                                                                                                expert_reliability, 
-                                                                                                                struct_eq_type, 
-                                                                                                                steps,
-                                                                                                                burn_in_steps,
-                                                                                                                updates,
-                                                                                                                mixing_rate)
-                                                                                                                """
-    return [experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate) for subk in jnp.array(subks)]
+    # func for running one replication
+    exp_rep = lambda subk: experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate)
+    
+    #with concurrent.futures.ThreadPoolExecutor() as executor:
+     #   res = executor.map(exp_rep , jnp.array(subks))
+        
+    # Parallel calculation using multiprocessing
+    with multiprocessing.Pool() as pool:
+        res = pool.map(exp_rep, jnp.array(subks))
+        
+    return res
+    #return [experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate) for subk in jnp.array(subks)]
 
 
 def __main__(*, exp_dict_file, exp_num):
@@ -265,6 +262,4 @@ def __main__(*, exp_dict_file, exp_num):
 
 
 if __name__ == '__main__':
-    res = __main__(exp_dict_file=sys.argv[1], exp_num=int(sys.argv[2]))
-    pickle.dump(res,  open("init_batch_test.p", "wb"))
-    print('pickled')
+    __main__(exp_dict_file=sys.argv[1], exp_num=int(sys.argv[2]))
