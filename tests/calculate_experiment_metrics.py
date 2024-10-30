@@ -171,6 +171,7 @@ def calculate_results(exp_settings_file, exp_num, seed=897, mixture=False):
     aurocs = np.ones((n_runs, n_components))
     neglls = np.ones((n_runs, n_components))
     ho_neglls = np.ones((n_runs, n_components))
+    classification_acc = np.ones((n_runs, n_components))
     
     # loop over experiments
     for run in range(exp_settings['n_runs']):
@@ -226,6 +227,7 @@ def calculate_results(exp_settings_file, exp_num, seed=897, mixture=False):
             ho_neglls[run, gt_i] = neg_ave_log_likelihood(dist=dist_k, eltwise_log_likelihood=eltwise_log_likelihood_observ, x=x_ho_k)
             
             # ADD CALCULATION FOR CLUSTERING ACCURACY OF q_c
+            # ADD CALCULATION FOR INTERVENTIONAL data
             descr = f'run: {run}, component {component}' 
             print(f'{descr} |  E-SHD: {eshds[run, gt_i]:4.1f}    AUROC: {aurocs[run, gt_i]:5.2f}    neg. LL {neglls[run, gt_i]:5.2f}')
             print('\n') if component == n_components-1 else print('')

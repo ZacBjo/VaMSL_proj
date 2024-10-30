@@ -12,14 +12,14 @@ def __main__(*, filename='dump.json'):
     """
     # All settings for experiment variables
     var_dict = {
-                'seed': [698], 
+                'seed': [924], 
                 'n_runs': [30], 
-                'mixing_rate': [[0.5, 0.5], [0.3, 0.7], [0.95, 0.05]],
+                'mixing_rate': [[0.5,0.5]],
                 'n_particles': [15],
                 'n_vars': [20],
-                'n_observations': [1000],
+                'n_observations': [2000],
                 'graph_type': ['sf'],
-                'n_queries': [0],
+                'n_queries': [0, 2, 4, 6, 8],
                 'expert_reliability': [1],
                 'struct_eq_type': ['linear'],
                 'steps': [3000],

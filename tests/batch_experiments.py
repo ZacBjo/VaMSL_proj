@@ -79,7 +79,7 @@ def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_typ
 
 def experiment_replication(key, n_particles, n_vars, n_observations,
                            graph_type, n_queries, expert_reliability, struct_eq_type, 
-                           steps, burn_in_steps, updates, mixing_rate):
+                           steps, burn_in_steps, updates, mixing_rate, init_queries=5):
     """
     Args:
         subk (KeyArrayLike): PRNG key.
@@ -128,42 +128,68 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         elicitor = edgeElicitation(simulator=bernoulli_simulator(), expected_utility='Rao-Blackwellized EIG')
         oracle = graphOracle(ground_truth_graphs)
         # List all possible experiments [n_components, n_vars**2, 2]
-        experiment_lists = jnp.array([[(i, j) for i in range(n_vars) for j in range(n_vars)] for k in range(n_components)])
+        experiment_lists = np.array([[(i, j) for i in range(n_vars) for j in range(n_vars)] for k in range(n_components)])
+        print(experiment_lists.shape)
         # Empty initial eliciation matrix
-        E = jnp.zeros((n_components, n_vars,n_vars))
+        E = np.zeros((n_components, n_vars, n_vars))
     
     # SAMPLE BURN IN POSTERIORS
     dt = 0 # initalize timer
-    for step in range(0, burn_in_steps, int(burn_in_steps/updates)):
-        # Elicitation if queries 
+    step = int(burn_in_steps/updates)
+    for steps in range(step, burn_in_steps+step, step):
+        # Elicitation if queries
         if not n_queries == 0:
             indices_list = []
             for component in range(n_components):
-                # Get component parameters which correspond to particle-wise edge probabilities
-                q_z_k, E_k = vamsl.get_posteriors()[0][component], E[component]
-                parameter_samples = vmap(vamsl.edge_probs, (0, None, None))(q_z_k, step, E_k)
-                # Get optimal queries
-                exps, EIGs, indices = elicitor.optimal_queries(parameter_samples=parameter_samples, 
-                                                               experiment_list=experiment_lists[component],
-                                                               n_queries=n_queries)
-                # Update elicitation matrix
-                key, subk = random.split(key)
-                E = oracle.update_elicitation_matrix(E=E, component=component, queries=exps,
-                                                     stochastic=True, key=subk, reliability=expert_reliability)
-                indices_list.append(indices)
+                # Initally get ground truth edges as informative prior 
+                if steps == step:
+                    # Get ground truth graph for component
+                    gt_g = ground_truth_graphs[component]
+                    # Sample init_queries edges from the ground truth graph
+                    for q in range(init_queries):
+                        # Sample indices until they correspond to an edge
+                        while True:
+                            i, j = np.random.choice(gt_g.shape[0]), np.random.choice(gt_g.shape[0])
+                            if gt_g[i,j] and not E[component, i, j]:
+                                break
+                        # Add the edge to the component's elicitation matrix
+                        E[component, i, j] = 1
+                else:
+                    print('Querying oracle...')
+                    # Get component parameters which correspond to particle-wise edge probabilities
+                    q_z_k, E_k = vamsl.get_posteriors()[0][component], E[component]
+                    parameter_samples = vmap(vamsl.edge_probs, (0, None, None))(q_z_k, step, E_k)
+                    # Get optimal queries
+                    print(component)
+                    print(experiment_lists.shape)
+                    experiment_list = experiment_lists[component]
+                    exps, EIGs, indices = elicitor.optimal_queries(parameter_samples=parameter_samples, 
+                                                                   experiment_list=experiment_list,
+                                                                   n_queries=n_queries)
+                    # Update elicitation matrix
+                    key, subk = random.split(key)
+                    E = oracle.update_elicitation_matrix(E=E, component=component, queries=exps,
+                                                         stochastic=True, key=subk, reliability=expert_reliability)
+                    indices_list.append(indices)
             
-            # Remove experiments that were queried from experiment list
-            experiment_lists = jnp.array([jnp.delete(exp_list, exp_is, axis=0) for exp_list, exp_is in zip(experiment_lists, indices_list)])
-            # Update the VaMSL elicitation matrix
+           
+            if steps == step:
+                E = jnp.array(E)
+            else:
+                # Remove experiments that were queried from experiment list
+                experiment_lists = np.array([np.delete(exp_list, exp_is, axis=0) for exp_list, exp_is in zip(experiment_lists, indices_list)])
+            
+            # Update the VaMSL elicitation matrix    
             vamsl.set_E(E)
-        print(f'steps: {step}')
+            
+        print(f'steps: {steps}')
         # Time of posterior inference
         t1 = time.time()
         # Update to optimal q(c) and q(\pi)
         vamsl.update_responsibilities_and_weights()
         # Optimize q(Z, \Theta)
         key, subk = random.split(key)
-        vamsl.update_particle_posteriors(key=subk, steps=step)
+        vamsl.update_particle_posteriors(key=subk, steps=steps)
         dt += time.time() - t1
         
     print(f'burnout...')

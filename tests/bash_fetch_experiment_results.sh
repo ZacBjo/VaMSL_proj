@@ -13,4 +13,4 @@ source activate ../env/
 
 export PYTHONUNBUFFERED=1 # force python to output print pronto
 # Each job will get an index from the list of experiment dicts
-python fetch_experiment_results.py mixing_exp_settings.json mixing_exp_settings_cond.p
+python batch_experiment_results.py dibs_replication_20d.json dibs_replication_20d_cond.p
