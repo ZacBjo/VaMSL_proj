@@ -13,18 +13,18 @@ def __main__(*, filename='dump.json'):
     # All settings for experiment variables
     var_dict = {
                 'seed': [698], 
-                'n_runs': [15], 
-                'mixing_rate': [[0.5, 0.5], [0.3, 0.7], [0.95, 0.05]],
-                'n_particles': [10],
+                'n_runs': [5], 
+                'mixing_rate': [[0.5, 0.5], [0.3, 0.7], [0.05, 0.95]],
+                'n_particles': [7],
                 'n_vars': [20],
-                'n_observations': [2000],
+                'n_observations': [100],
                 'graph_type': ['sf'],
                 'n_queries': [0],
                 'expert_reliability': [1],
                 'struct_eq_type': ['linear'],
-                'steps': [3000],
-                'burn_in_steps': [1000],
-                'updates': [10]
+                'steps': [1500],
+                'burn_in_steps': [500],
+                'updates': [5]
                }
     
     # Generate list of variable permutations
@@ -34,6 +34,8 @@ def __main__(*, filename='dump.json'):
     # Write list of variable permutations to JSON file 
     with open(filename, 'w') as write_file:
         json.dump(permutations_dicts, write_file)
+        
+    print(f'Wrote experiment settings to: {filename}.')
     
 if __name__ == '__main__':
-    main(filename=sys.argv[1])
+    __main__(filename=sys.argv[1])
