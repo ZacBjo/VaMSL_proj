@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/scratch/work/bjorkmz1/PML_2024/VaMSL_proj/tests/batch_experiments.py", line 269, in <module>
+    __main__(exp_dict_file=sys.argv[1], exp_num=int(sys.argv[2]))
+  File "/scratch/work/bjorkmz1/PML_2024/VaMSL_proj/tests/batch_experiments.py", line 231, in __main__
+    exp_dict = json.load(read_file)[exp_num]
+               ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+IndexError: list index out of range

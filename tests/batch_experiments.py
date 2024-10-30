@@ -95,6 +95,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
     """
     n_components = mixing_rate.shape[0]
     # Generate data for experiment
+    print('Generating data...')
     key, subk = random.split(key)
     x_ind, ground_truth_graphs, ground_truth_thetas, lik, component_lik, graph_model = generate_experiment_data(subk,
                                                                                                                 mixing_rate,
@@ -114,7 +115,8 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         k = np.random.randint(0, K) # randomly assign each datapoint to a cluster a priori
         c[n,k] = 1
     q_c = jnp.array(c)
-    
+
+    print('Creating VaMSL...')
     # Create VaMSL and initialize posteriors (remove indicator vecor from dataset)
     vamsl = VaMSL(x=x, graph_model=graph_model, mixture_likelihood_model=lik, component_likelihood_model=component_lik)
     key, subk = random.split(key)
@@ -154,7 +156,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
             experiment_lists = jnp.array([jnp.delete(exp_list, exp_is, axis=0) for exp_list, exp_is in zip(experiment_lists, indices_list)])
             # Update the VaMSL elicitation matrix
             vamsl.set_E(E)
-            
+        print(f'steps: {step}')
         # Time of posterior inference
         t1 = time.time()
         # Update to optimal q(c) and q(\pi)
@@ -164,7 +166,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         vamsl.update_particle_posteriors(key=subk, steps=step)
         dt += time.time() - t1
         
-        
+    print(f'burnout...')
     # SAMPLE FINAL POSTERIORS
     # Time of posterior inference
     t1 = time.time()
@@ -174,7 +176,8 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
     key, subk = random.split(key)
     vamsl.update_particle_posteriors(key=subk, steps=steps-burn_in_steps)
     dt += time.time() - t1
-    
+
+    print('Returning results...')
     # Return posteriors and experiment data
     return {'gs': ground_truth_graphs, 'thetas': ground_truth_thetas, 'posteriors': vamsl.get_posteriors(), 
             'E': vamsl.get_E(), 'indicated_data': x_ind, 'delta_time': dt}
@@ -204,7 +207,8 @@ def run_experiments(*, seed, n_runs, mixing_rate, n_particles, n_vars, n_observa
     key = random.PRNGKey(seed)
     # Generate PRNG subkey for each experiment replication
     key, *subks = random.split(key, n_runs+1)
-    
+
+    print('Running replications...')
     # func for running one replication
     def run_replicate(subk):
         return experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate)

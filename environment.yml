@@ -1,9 +1,20 @@
 name: vamsl
 channels:
-- defaults
+- conda-forge
 dependencies:
-- conda=4.9.2
-- python=3.8.3
+- numpy
+- python=3.11
+- imageio
+- tqdm
+- matplotlib
+- igraph
+- scikit-learn
+- jupyter
 - pip
 - pip:
-  - -r ./requirements.txt
+    - "jax[cuda12]==0.4.26 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+    - flax
+    - dm-haiku
+    - dm-sonnet
+    - reverb
+    - .
