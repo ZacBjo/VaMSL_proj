@@ -1,0 +1,454 @@
+Experiment: 1, mixing rate: [0.5, 0.5]
+run: 0, component 0 |  E-SHD: 74.4    AUROC:  0.55    neg. LL 3517668.50
+
+run: 0, component 1 |  E-SHD: 69.6    AUROC:  0.50    neg. LL 856421.25
+
+
+run: 1, component 0 |  E-SHD: 72.7    AUROC:  0.49    neg. LL 538493.81
+
+run: 1, component 1 |  E-SHD: 57.6    AUROC:  0.53    neg. LL 578505.75
+
+
+run: 2, component 0 |  E-SHD: 71.6    AUROC:  0.50    neg. LL 108390.77
+
+run: 2, component 1 |  E-SHD: 71.4    AUROC:  0.57    neg. LL 176909.42
+
+
+run: 3, component 0 |  E-SHD: 67.1    AUROC:  0.78    neg. LL 61047.20
+
+run: 3, component 1 |  E-SHD: 61.8    AUROC:  0.80    neg. LL 23678.64
+
+
+run: 4, component 0 |  E-SHD: 73.7    AUROC:  0.47    neg. LL 461164.28
+
+run: 4, component 1 |  E-SHD: 67.9    AUROC:  0.45    neg. LL 787016.12
+
+
+run: 5, component 0 |  E-SHD: 74.1    AUROC:  0.47    neg. LL 395604.47
+
+run: 5, component 1 |  E-SHD: 70.7    AUROC:  0.47    neg. LL 166014.23
+
+
+run: 6, component 0 |  E-SHD: 59.8    AUROC:  0.63    neg. LL 485589.41
+
+run: 6, component 1 |  E-SHD: 60.6    AUROC:  0.63    neg. LL 2505395.75
+
+
+run: 7, component 0 |  E-SHD: 67.5    AUROC:  0.39    neg. LL 120763.88
+
+run: 7, component 1 |  E-SHD: 66.5    AUROC:  0.65    neg. LL 42695.47
+
+
+run: 8, component 0 |  E-SHD: 69.9    AUROC:  0.52    neg. LL 245260.02
+
+run: 8, component 1 |  E-SHD: 70.5    AUROC:  0.46    neg. LL 1844071.50
+
+
+run: 9, component 0 |  E-SHD: 62.3    AUROC:  0.68    neg. LL 3947439.25
+
+run: 9, component 1 |  E-SHD: 56.4    AUROC:  0.63    neg. LL 543919.94
+
+
+run: 10, component 0 |  E-SHD: 59.4    AUROC:  0.53    neg. LL 4567848.00
+
+run: 10, component 1 |  E-SHD: 65.1    AUROC:  0.53    neg. LL 370753.16
+
+
+run: 11, component 0 |  E-SHD: 72.9    AUROC:  0.48    neg. LL 1334176.12
+
+run: 11, component 1 |  E-SHD: 65.4    AUROC:  0.53    neg. LL 1373723.62
+
+
+run: 12, component 0 |  E-SHD: 67.2    AUROC:  0.55    neg. LL 669000.44
+
+run: 12, component 1 |  E-SHD: 63.5    AUROC:  0.59    neg. LL 236053.05
+
+
+run: 13, component 0 |  E-SHD: 64.8    AUROC:  0.44    neg. LL 311309.34
+
+run: 13, component 1 |  E-SHD: 67.1    AUROC:  0.49    neg. LL 1283777.12
+
+
+run: 14, component 0 |  E-SHD: 68.8    AUROC:  0.55    neg. LL 156655.05
+
+run: 14, component 1 |  E-SHD: 63.4    AUROC:  0.56    neg. LL 279575.88
+
+
+run: 15, component 0 |  E-SHD: 63.6    AUROC:  0.52    neg. LL 248293.09
+
+run: 15, component 1 |  E-SHD: 63.6    AUROC:  0.55    neg. LL 462417.66
+
+
+run: 16, component 0 |  E-SHD: 66.9    AUROC:  0.58    neg. LL 631103.75
+
+run: 16, component 1 |  E-SHD: 62.5    AUROC:  0.57    neg. LL 2034666.88
+
+
+run: 17, component 0 |  E-SHD: 64.7    AUROC:  0.68    neg. LL 44953.79
+
+run: 17, component 1 |  E-SHD: 62.9    AUROC:  0.83    neg. LL 53507.45
+
+
+run: 18, component 0 |  E-SHD: 67.8    AUROC:  0.50    neg. LL 214999.89
+
+run: 18, component 1 |  E-SHD: 73.7    AUROC:  0.61    neg. LL 95482.54
+
+
+run: 19, component 0 |  E-SHD: 66.7    AUROC:  0.48    neg. LL 271506.56
+
+run: 19, component 1 |  E-SHD: 66.8    AUROC:  0.67    neg. LL 624854.44
+
+
+run: 20, component 0 |  E-SHD: 70.0    AUROC:  0.49    neg. LL 380040.81
+
+run: 20, component 1 |  E-SHD: 66.3    AUROC:  0.47    neg. LL 1861605.38
+
+
+run: 21, component 0 |  E-SHD: 66.0    AUROC:  0.48    neg. LL 208668.22
+
+run: 21, component 1 |  E-SHD: 71.8    AUROC:  0.45    neg. LL 383985.59
+
+
+run: 22, component 0 |  E-SHD: 71.1    AUROC:  0.48    neg. LL 2664641.00
+
+run: 22, component 1 |  E-SHD: 70.2    AUROC:  0.47    neg. LL 153820.05
+
+
+run: 23, component 0 |  E-SHD: 74.2    AUROC:  0.54    neg. LL 671859.00
+
+run: 23, component 1 |  E-SHD: 78.1    AUROC:  0.52    neg. LL 4835779.50
+
+
+run: 24, component 0 |  E-SHD: 68.7    AUROC:  0.50    neg. LL 302711.03
+
+run: 24, component 1 |  E-SHD: 69.8    AUROC:  0.49    neg. LL 376204.00
+
+
+run: 25, component 0 |  E-SHD: 76.6    AUROC:  0.41    neg. LL 723988.56
+
+run: 25, component 1 |  E-SHD: 76.3    AUROC:  0.41    neg. LL 272087.44
+
+
+run: 26, component 0 |  E-SHD: 66.9    AUROC:  0.47    neg. LL 110695.48
+
+run: 26, component 1 |  E-SHD: 68.4    AUROC:  0.44    neg. LL 256495.48
+
+
+run: 27, component 0 |  E-SHD: 68.0    AUROC:  0.48    neg. LL 791430.50
+
+run: 27, component 1 |  E-SHD: 68.1    AUROC:  0.61    neg. LL 498901.94
+
+
+run: 28, component 0 |  E-SHD: 53.6    AUROC:  0.69    neg. LL 238113.50
+
+run: 28, component 1 |  E-SHD: 50.4    AUROC:  0.62    neg. LL 298699.12
+
+
+run: 29, component 0 |  E-SHD: 64.3    AUROC:  0.50    neg. LL 869008.31
+
+run: 29, component 1 |  E-SHD: 68.1    AUROC:  0.52    neg. LL 129592.48
+
+
+Experiment: 2, mixing rate: [0.3, 0.7]
+run: 0, component 0 |  E-SHD: 71.8    AUROC:  0.50    neg. LL 3522086.00
+
+run: 0, component 1 |  E-SHD: 71.8    AUROC:  0.49    neg. LL 960789.62
+
+
+run: 1, component 0 |  E-SHD: 63.1    AUROC:  0.53    neg. LL 432914.84
+
+run: 1, component 1 |  E-SHD: 67.4    AUROC:  0.58    neg. LL 653712.44
+
+
+run: 2, component 0 |  E-SHD: 72.0    AUROC:  0.48    neg. LL 153861.12
+
+run: 2, component 1 |  E-SHD: 66.3    AUROC:  0.49    neg. LL 268063.09
+
+
+run: 3, component 0 |  E-SHD: 69.1    AUROC:  0.71    neg. LL 99554.93
+
+run: 3, component 1 |  E-SHD: 67.4    AUROC:  0.45    neg. LL 315019.22
+
+
+run: 4, component 0 |  E-SHD: 75.6    AUROC:  0.48    neg. LL 273866.31
+
+run: 4, component 1 |  E-SHD: 70.2    AUROC:  0.47    neg. LL 1179964.88
+
+
+run: 5, component 0 |  E-SHD: 78.5    AUROC:  0.37    neg. LL 238543.52
+
+run: 5, component 1 |  E-SHD: 67.1    AUROC:  0.62    neg. LL 72066.78
+
+
+run: 6, component 0 |  E-SHD: 59.1    AUROC:  0.66    neg. LL 241168.56
+
+run: 6, component 1 |  E-SHD: 58.3    AUROC:  0.59    neg. LL 4037529.50
+
+
+run: 7, component 0 |  E-SHD: 61.0    AUROC:  0.62    neg. LL 61715.63
+
+run: 7, component 1 |  E-SHD: 75.4    AUROC:  0.41    neg. LL 98259.67
+
+
+run: 8, component 0 |  E-SHD: 70.5    AUROC:  0.46    neg. LL 132292.72
+
+run: 8, component 1 |  E-SHD: 67.0    AUROC:  0.46    neg. LL 2620819.00
+
+
+run: 9, component 0 |  E-SHD: 60.5    AUROC:  0.71    neg. LL 5039211.50
+
+run: 9, component 1 |  E-SHD: 59.5    AUROC:  0.62    neg. LL 354059.00
+
+
+run: 10, component 0 |  E-SHD: 61.5    AUROC:  0.51    neg. LL 3044392.75
+
+run: 10, component 1 |  E-SHD: 67.0    AUROC:  0.75    neg. LL 86555.06
+
+
+run: 11, component 0 |  E-SHD: 72.1    AUROC:  0.51    neg. LL 2007088.25
+
+run: 11, component 1 |  E-SHD: 64.2    AUROC:  0.52    neg. LL 837063.50
+
+
+run: 12, component 0 |  E-SHD: 67.7    AUROC:  0.53    neg. LL 660650.31
+
+run: 12, component 1 |  E-SHD: 63.4    AUROC:  0.55    neg. LL 436082.25
+
+
+run: 13, component 0 |  E-SHD: 64.9    AUROC:  0.45    neg. LL 1061956.75
+
+run: 13, component 1 |  E-SHD: 69.0    AUROC:  0.42    neg. LL 131632.52
+
+
+run: 14, component 0 |  E-SHD: 66.8    AUROC:  0.57    neg. LL 237646.16
+
+run: 14, component 1 |  E-SHD: 63.7    AUROC:  0.57    neg. LL 166271.23
+
+
+run: 15, component 0 |  E-SHD: 66.9    AUROC:  0.51    neg. LL 314939.94
+
+run: 15, component 1 |  E-SHD: 63.3    AUROC:  0.57    neg. LL 409439.50
+
+
+run: 16, component 0 |  E-SHD: 66.5    AUROC:  0.60    neg. LL 1243470.38
+
+run: 16, component 1 |  E-SHD: 64.1    AUROC:  0.56    neg. LL 699558.19
+
+
+run: 17, component 0 |  E-SHD: 67.1    AUROC:  0.41    neg. LL 416913.00
+
+run: 17, component 1 |  E-SHD: 75.4    AUROC:  0.43    neg. LL 316162.00
+
+
+run: 18, component 0 |  E-SHD: 70.0    AUROC:  0.46    neg. LL 244599.45
+
+run: 18, component 1 |  E-SHD: 69.7    AUROC:  0.66    neg. LL 68191.00
+
+
+run: 19, component 0 |  E-SHD: 59.1    AUROC:  0.88    neg. LL 26160.67
+
+run: 19, component 1 |  E-SHD: 66.5    AUROC:  0.77    neg. LL 25004.95
+
+
+run: 20, component 0 |  E-SHD: 71.5    AUROC:  0.50    neg. LL 205056.52
+
+run: 20, component 1 |  E-SHD: 68.2    AUROC:  0.48    neg. LL 2750600.00
+
+
+run: 21, component 0 |  E-SHD: 67.5    AUROC:  0.48    neg. LL 128256.74
+
+run: 21, component 1 |  E-SHD: 71.5    AUROC:  0.44    neg. LL 356271.09
+
+
+run: 22, component 0 |  E-SHD: 70.6    AUROC:  0.48    neg. LL 1958049.12
+
+run: 22, component 1 |  E-SHD: 70.4    AUROC:  0.49    neg. LL 410634.53
+
+
+run: 23, component 0 |  E-SHD: 70.0    AUROC:  0.58    neg. LL 992123.50
+
+run: 23, component 1 |  E-SHD: 78.8    AUROC:  0.49    neg. LL 4994606.00
+
+
+run: 24, component 0 |  E-SHD: 70.3    AUROC:  0.74    neg. LL 31510.83
+
+run: 24, component 1 |  E-SHD: 58.9    AUROC:  0.82    neg. LL 44038.67
+
+
+run: 25, component 0 |  E-SHD: 76.1    AUROC:  0.41    neg. LL 1079019.62
+
+run: 25, component 1 |  E-SHD: 79.4    AUROC:  0.43    neg. LL 169068.98
+
+
+run: 26, component 0 |  E-SHD: 68.6    AUROC:  0.43    neg. LL 187998.44
+
+run: 26, component 1 |  E-SHD: 68.5    AUROC:  0.56    neg. LL 91573.93
+
+
+run: 27, component 0 |  E-SHD: 71.6    AUROC:  0.45    neg. LL 2452519.50
+
+run: 27, component 1 |  E-SHD: 66.6    AUROC:  0.54    neg. LL 560734.75
+
+
+run: 28, component 0 |  E-SHD: 53.3    AUROC:  0.68    neg. LL 158243.38
+
+run: 28, component 1 |  E-SHD: 53.2    AUROC:  0.60    neg. LL 323769.78
+
+
+run: 29, component 0 |  E-SHD: 71.0    AUROC:  0.47    neg. LL 102851.09
+
+run: 29, component 1 |  E-SHD: 64.2    AUROC:  0.49    neg. LL 1116799.75
+
+
+Experiment: 3, mixing rate: [0.95, 0.05]
+run: 0, component 0 |  E-SHD: 70.2    AUROC:  0.49    neg. LL 135969.73
+
+run: 0, component 1 |  E-SHD: 59.3    AUROC:  0.89    neg. LL 228340.78
+
+
+run: 1, component 0 |  E-SHD: 67.4    AUROC:  0.55    neg. LL 40975.41
+
+run: 1, component 1 |  E-SHD: 46.3    AUROC:  0.94    neg. LL 238267.06
+
+
+run: 2, component 0 |  E-SHD: 69.1    AUROC:  0.50    neg. LL 590768.12
+
+run: 2, component 1 |  E-SHD: 68.1    AUROC:  0.51    neg. LL 13507.25
+
+
+run: 3, component 0 |  E-SHD: 74.2    AUROC:  0.44    neg. LL 79440.27
+
+run: 3, component 1 |  E-SHD: 43.3    AUROC:  0.90    neg. LL 31384.84
+
+
+run: 4, component 0 |  E-SHD: 36.2    AUROC:  0.96    neg. LL 25162.31
+
+run: 4, component 1 |  E-SHD: 70.4    AUROC:  0.48    neg. LL 43494.45
+
+
+run: 5, component 0 |  E-SHD: 75.4    AUROC:  0.47    neg. LL 18525.07
+
+run: 5, component 1 |  E-SHD: 45.7    AUROC:  0.93    neg. LL 22645.38
+
+
+run: 6, component 0 |  E-SHD: 52.8    AUROC:  0.91    neg. LL 201874.73
+
+run: 6, component 1 |  E-SHD: 60.4    AUROC:  0.60    neg. LL 145846.81
+
+
+run: 7, component 0 |  E-SHD: 47.5    AUROC:  0.92    neg. LL 27077.57
+
+run: 7, component 1 |  E-SHD: 69.1    AUROC:  0.44    neg. LL 19820.65
+
+
+run: 8, component 0 |  E-SHD: 68.1    AUROC:  0.46    neg. LL 443321.44
+
+run: 8, component 1 |  E-SHD: 68.5    AUROC:  0.44    neg. LL 133745.98
+
+
+run: 9, component 0 |  E-SHD: 62.7    AUROC:  0.58    neg. LL 600884.56
+
+run: 9, component 1 |  E-SHD: 56.8    AUROC:  0.64    neg. LL 1218559.25
+
+
+run: 10, component 0 |  E-SHD: 53.0    AUROC:  0.88    neg. LL 129009.71
+
+run: 10, component 1 |  E-SHD: 64.9    AUROC:  0.53    neg. LL 35370.31
+
+
+run: 11, component 0 |  E-SHD: 73.5    AUROC:  0.47    neg. LL 143610.88
+
+run: 11, component 1 |  E-SHD: 47.7    AUROC:  0.93    neg. LL 101348.80
+
+
+run: 12, component 0 |  E-SHD: 63.6    AUROC:  0.50    neg. LL 2352542.50
+
+run: 12, component 1 |  E-SHD: 60.6    AUROC:  0.59    neg. LL 22811.38
+
+
+run: 13, component 0 |  E-SHD: 68.1    AUROC:  0.43    neg. LL 157401.42
+
+run: 13, component 1 |  E-SHD: 66.3    AUROC:  0.42    neg. LL 533164.06
+
+
+run: 14, component 0 |  E-SHD: 58.1    AUROC:  0.70    neg. LL 112135.84
+
+run: 14, component 1 |  E-SHD: 71.2    AUROC:  0.51    neg. LL 19894.24
+
+
+run: 15, component 0 |  E-SHD: 62.5    AUROC:  0.69    neg. LL 14998.33
+
+run: 15, component 1 |  E-SHD: 54.9    AUROC:  0.88    neg. LL 24473.28
+
+
+run: 16, component 0 |  E-SHD: 59.1    AUROC:  0.59    neg. LL 4339534.00
+
+run: 16, component 1 |  E-SHD: 62.8    AUROC:  0.56    neg. LL 66628.25
+
+
+run: 17, component 0 |  E-SHD: 73.0    AUROC:  0.40    neg. LL 39928.96
+
+run: 17, component 1 |  E-SHD: 51.7    AUROC:  0.93    neg. LL 28981.31
+
+
+run: 18, component 0 |  E-SHD: 69.4    AUROC:  0.50    neg. LL 63327.15
+
+run: 18, component 1 |  E-SHD: 44.5    AUROC:  0.91    neg. LL 39640.64
+
+
+run: 19, component 0 |  E-SHD: 55.9    AUROC:  0.85    neg. LL 62228.98
+
+run: 19, component 1 |  E-SHD: 69.0    AUROC:  0.46    neg. LL 20348.32
+
+
+run: 20, component 0 |  E-SHD: 67.5    AUROC:  0.47    neg. LL 135553.08
+
+run: 20, component 1 |  E-SHD: 67.4    AUROC:  0.45    neg. LL 772991.62
+
+
+run: 21, component 0 |  E-SHD: 38.2    AUROC:  0.95    neg. LL 18311.61
+
+run: 21, component 1 |  E-SHD: 72.3    AUROC:  0.46    neg. LL 27257.95
+
+
+run: 22, component 0 |  E-SHD: 42.6    AUROC:  0.94    neg. LL 99984.43
+
+run: 22, component 1 |  E-SHD: 71.6    AUROC:  0.46    neg. LL 10153.06
+
+
+run: 23, component 0 |  E-SHD: 77.2    AUROC:  0.51    neg. LL 85950.72
+
+run: 23, component 1 |  E-SHD: 69.9    AUROC:  0.81    neg. LL 226574.41
+
+
+run: 24, component 0 |  E-SHD: 71.4    AUROC:  0.51    neg. LL 104498.77
+
+run: 24, component 1 |  E-SHD: 50.8    AUROC:  0.88    neg. LL 27174.94
+
+
+run: 25, component 0 |  E-SHD: 77.7    AUROC:  0.40    neg. LL 81564.21
+
+run: 25, component 1 |  E-SHD: 67.3    AUROC:  0.79    neg. LL 90129.28
+
+
+run: 26, component 0 |  E-SHD: 61.7    AUROC:  0.79    neg. LL 57802.02
+
+run: 26, component 1 |  E-SHD: 69.8    AUROC:  0.45    neg. LL 17410.18
+
+
+run: 27, component 0 |  E-SHD: 53.5    AUROC:  0.80    neg. LL 45474.23
+
+run: 27, component 1 |  E-SHD: 72.6    AUROC:  0.53    neg. LL 81865.26
+
+
+run: 28, component 0 |  E-SHD: 50.4    AUROC:  0.70    neg. LL 404231.22
+
+run: 28, component 1 |  E-SHD: 52.8    AUROC:  0.61    neg. LL 23749.97
+
+
+run: 29, component 0 |  E-SHD: 65.8    AUROC:  0.50    neg. LL 103394.65
+
+run: 29, component 1 |  E-SHD: 66.5    AUROC:  0.44    neg. LL 253504.81
+
+
+pickled metrics to mixing_exp_settings_.p...
