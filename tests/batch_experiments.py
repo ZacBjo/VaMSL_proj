@@ -13,8 +13,6 @@ import sys, ast
 import time 
 import pickle
 import json
-import concurrent.futures
-import multiprocessing
 
 def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_type, struct_eq_type):
     """
@@ -31,10 +29,7 @@ def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_typ
         
     Output:
         pass
-    """
-    # Generate ubkeys for each component
-    key, *subks = random.split(key, len(mixing_rate)+1)
-    
+    """    
     # Generate either linear or non-linear data
     if struct_eq_type == "linear":
         make_data_model = make_linear_gaussian_model
@@ -52,6 +47,8 @@ def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_typ
     graphs = []
     thetas = []
     # loop over components
+    # Generate ubkeys for each component
+    key, *subks = random.split(key, len(mixing_rate)+1)
     for subk, n_comp_obs in zip(jnp.array(subks), comp_observations):
         data, graph_model, component_lik_model = make_data_model(key=subk, n_vars=n_vars, 
                                                                  graph_prior_str=graph_type,
@@ -61,7 +58,7 @@ def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_typ
         thetas.append(data.theta)
     
     # Combine observation sets
-    x = np.concatenate(xs, axis=0)
+    x = np.concatenate(xs, axis=0) # numpy array to be mutable
     graphs = jnp.array(graphs)
     if struct_eq_type == "linear":
         thetas = jnp.array(thetas)
@@ -70,7 +67,7 @@ def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_typ
     indicator = np.concatenate([k * np.ones(int(comp_observations[k].item())) for k in range(comp_observations.shape[0])],axis=0).reshape((-1,1))
     x = np.hstack([x, indicator])
     
-    # shuffle data 
+    # shuffle data (numpy shuffle is in-place)
     np.random.shuffle(x)
     
     # Return data sets
@@ -79,7 +76,8 @@ def generate_experiment_data(key, mixing_rate, n_vars, n_observations, graph_typ
 
 def experiment_replication(key, n_particles, n_vars, n_observations,
                            graph_type, n_queries, expert_reliability, struct_eq_type, 
-                           steps, burn_in_steps, updates, mixing_rate, init_queries=5):
+                           steps, burn_in_steps, updates, mixing_rate, init_queries,
+                           random_queries=False):
     """
     Args:
         subk (KeyArrayLike): PRNG key.
@@ -121,6 +119,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
     vamsl = VaMSL(x=x, graph_model=graph_model, mixture_likelihood_model=lik, component_likelihood_model=component_lik)
     key, subk = random.split(key)
     vamsl.initialize_posteriors(key=subk, init_q_c=q_c, n_particles=n_particles)
+    E = jnp.zeros((n_components, n_vars, n_vars))
    
     # If queries, create necessary objects
     if not n_queries == 0:
@@ -129,68 +128,80 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         oracle = graphOracle(ground_truth_graphs)
         # List all possible experiments [n_components, n_vars**2, 2]
         experiment_lists = np.array([[(i, j) for i in range(n_vars) for j in range(n_vars)] for k in range(n_components)])
-        print(experiment_lists.shape)
         # Empty initial eliciation matrix
-        E = np.zeros((n_components, n_vars, n_vars))
+
+    # Initalize informative graph priors TODO: Move to function
+    if not init_queries == 0:
+        E = np.zeros((n_components, n_vars, n_vars)) # for mutable array
+        for component in range(n_components):
+            # Get ground truth graph for component
+            gt_g = ground_truth_graphs[component]
+            # If initial query number is greater than edges, set to number of edges
+            if init_queries > np.count_nonzero(gt_g):
+                n_init = np.count_nonzero(gt_g == 1)
+            else:
+                n_init = init_queries
+            # Sample init_queries edges from the ground truth graph
+            for q in range(n_init):
+                # Sample indices until they correspond to an edge
+                while True:
+                    i, j = np.random.choice(gt_g.shape[0]), np.random.choice(gt_g.shape[0])
+                    if gt_g[i,j] and not E[component, i, j]:
+                        break
+                # Add the edge to the component's elicitation matrix
+                E[component, i, j] = 1
+
+    print(f'Initial edges in E: {jnp.count_nonzero(E)}')
+    # Update VaMSL's elicitation matrix
+    vamsl.set_E(jnp.array(E))
+
+    #
+    # start of posterior inference
+    #
     
     # SAMPLE BURN IN POSTERIORS
     dt = 0 # initalize timer
     step = int(burn_in_steps/updates)
-    for steps in range(step, burn_in_steps+step, step):
-        # Elicitation if queries
-        if not n_queries == 0:
-            indices_list = []
-            for component in range(n_components):
-                # Initally get ground truth edges as informative prior 
-                if steps == step:
-                    # Get ground truth graph for component
-                    gt_g = ground_truth_graphs[component]
-                    # Sample init_queries edges from the ground truth graph
-                    for q in range(init_queries):
-                        # Sample indices until they correspond to an edge
-                        while True:
-                            i, j = np.random.choice(gt_g.shape[0]), np.random.choice(gt_g.shape[0])
-                            if gt_g[i,j] and not E[component, i, j]:
-                                break
-                        # Add the edge to the component's elicitation matrix
-                        E[component, i, j] = 1
-                else:
-                    print('Querying oracle...')
-                    # Get component parameters which correspond to particle-wise edge probabilities
-                    q_z_k, E_k = vamsl.get_posteriors()[0][component], E[component]
-                    parameter_samples = vmap(vamsl.edge_probs, (0, None, None))(q_z_k, step, E_k)
-                    # Get optimal queries
-                    print(component)
-                    print(experiment_lists.shape)
-                    experiment_list = experiment_lists[component]
-                    exps, EIGs, indices = elicitor.optimal_queries(parameter_samples=parameter_samples, 
-                                                                   experiment_list=experiment_list,
-                                                                   n_queries=n_queries)
-                    # Update elicitation matrix
-                    key, subk = random.split(key)
-                    E = oracle.update_elicitation_matrix(E=E, component=component, queries=exps,
-                                                         stochastic=True, key=subk, reliability=expert_reliability)
-                    indices_list.append(indices)
-            
-           
-            if steps == step:
-                E = jnp.array(E)
-            else:
-                # Remove experiments that were queried from experiment list
-                experiment_lists = np.array([np.delete(exp_list, exp_is, axis=0) for exp_list, exp_is in zip(experiment_lists, indices_list)])
-            
-            # Update the VaMSL elicitation matrix    
-            vamsl.set_E(E)
-            
-        print(f'steps: {steps}')
+    for n_steps in range(step, burn_in_steps+step, step):            
+        print(f'step: {n_steps}')
         # Time of posterior inference
         t1 = time.time()
         # Update to optimal q(c) and q(\pi)
         vamsl.update_responsibilities_and_weights()
         # Optimize q(Z, \Theta)
         key, subk = random.split(key)
-        vamsl.update_particle_posteriors(key=subk, steps=steps)
+        vamsl.update_particle_posteriors(key=subk, steps=n_steps)
         dt += time.time() - t1
+
+        # Elicitation if queries
+        if not n_queries == 0:
+            indices_list = []
+            E = vamsl.get_E()
+            for component in range(n_components): # TODO: Make function
+                print('Querying oracle...')
+                # Get component parameters which correspond to particle-wise edge probabilities
+                q_z_k, E_k = vamsl.get_posteriors()[0][component], E[component]
+                parameter_samples = vmap(vamsl.edge_probs, (0, None, None))(q_z_k, step, E_k)
+                # Get optimal queries
+                experiment_list = experiment_lists[component]
+                exps, EIGs, indices = elicitor.optimal_queries(parameter_samples=parameter_samples, 
+                                                               experiment_list=experiment_list,
+                                                               n_queries=n_queries)
+                if random_queries:
+                    # overwrite BED queries with random 
+                    indices = np.random.choice(range(experiment_list.shape[0]), n_queries, replace=False)
+                    exps = experiment_list[indices]
+                
+                # Update elicitation matrix
+                key, subk = random.split(key)
+                E = oracle.update_elicitation_matrix(E=E, component=component, queries=exps,
+                                                     stochastic=True, key=subk, reliability=expert_reliability)
+                indices_list.append(indices)
+                
+            # Remove experiments that were queried from experiment list
+            experiment_lists = np.array([np.delete(exp_list, exp_is, axis=0) for exp_list, exp_is in zip(experiment_lists, indices_list)])
+            # Update the VaMSL elicitation matrix 
+            vamsl.set_E(E)
         
     print(f'burnout...')
     # SAMPLE FINAL POSTERIORS
@@ -211,7 +222,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
 
 def run_experiments(*, seed, n_runs, mixing_rate, n_particles, n_vars, n_observations,
                     graph_type, n_queries, expert_reliability, struct_eq_type, steps,
-                    burn_in_steps, updates):
+                    burn_in_steps, updates, init_queries):
     """
     Run n_runs replications of experiments.
     
@@ -237,7 +248,10 @@ def run_experiments(*, seed, n_runs, mixing_rate, n_particles, n_vars, n_observa
     print('Running replications...')
     # func for running one replication
     def run_replicate(subk):
-        return experiment_replication(subk, n_particles, n_vars, n_observations,graph_type, n_queries, expert_reliability, struct_eq_type, steps,burn_in_steps,updates, mixing_rate)
+        return experiment_replication(subk, n_particles, n_vars, n_observations,
+                                      graph_type, n_queries, expert_reliability, 
+                                      struct_eq_type, steps,burn_in_steps,updates, 
+                                      mixing_rate, init_queries)
     
     # Run replications
     return [run_replicate(subk) for subk in jnp.array(subks)]
@@ -255,6 +269,8 @@ def __main__(*, exp_dict_file, exp_num):
     # Get experiment variable dictionary from expriment index
     with open(exp_dict_file, "r") as read_file:
         exp_dict = json.load(read_file)[exp_num]
+
+    print(f'Running experiments with settings:\n{exp_dict}')
     
     # Load variables
     seed = exp_dict['seed']
@@ -266,12 +282,13 @@ def __main__(*, exp_dict_file, exp_num):
     n_observations = exp_dict['n_observations']
     graph_type = exp_dict['graph_type']
     n_queries = exp_dict['n_queries']
+    init_queries = exp_dict['init_queries']
     expert_reliability = exp_dict['expert_reliability']
     struct_eq_type = exp_dict['struct_eq_type']
     steps = exp_dict['steps']
     burn_in_steps = exp_dict['burn_in_steps']
     updates = exp_dict['updates']
-    
+
     # Checks 
     assert graph_type in ['er', 'sf'], f"graph_type must be either 'er' or 'sf'. Got {graph_type}."
     assert 0 <= expert_reliability <= 1, f"expert_reliability must be [0,1] probability. Got {expert_reliability}."
@@ -281,10 +298,10 @@ def __main__(*, exp_dict_file, exp_num):
     res = run_experiments(seed=seed, n_runs=n_runs, mixing_rate=mixing_rate, n_particles=n_particles,
                           n_vars=n_vars, n_observations=n_observations, graph_type=graph_type,
                           n_queries=n_queries, expert_reliability=expert_reliability, struct_eq_type=struct_eq_type,
-                          steps=steps,burn_in_steps=burn_in_steps, updates=updates)
+                          steps=steps,burn_in_steps=burn_in_steps, updates=updates, init_queries=init_queries)
     
     # Create filename based on experiment dictionary soruce and experiment index
-    result_filename = 'results/' + exp_dict_file[:-5] + '_run_' + str(exp_num) + '.p'
+    result_filename = 'experiment_results/' + exp_dict_file[20:-5] + '_run_' + str(exp_num) + '.p'
     
     # Pickle results
     pickle.dump(res,  open(result_filename, "wb"))

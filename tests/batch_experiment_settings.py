@@ -1,3 +1,5 @@
+from numpy import random
+
 import json
 import itertools
 import sys
@@ -10,21 +12,26 @@ def __main__(*, filename='dump.json'):
     Args:
         filename (str): name of JSON file that is written.
     """
+    # Generate random seed for batch experiments
+    seed = random.randint(low=0, high=10000)
+    
     # All settings for experiment variables
+    # Change according to desired experimental setup.
     var_dict = {
-                'seed': [924], 
+                'seed': [seed], 
                 'n_runs': [30], 
-                'mixing_rate': [[0.5,0.5]],
+                'mixing_rate': [[1.0, 0.0]],
                 'n_particles': [15],
                 'n_vars': [20],
-                'n_observations': [2000],
+                'n_observations': [200],
                 'graph_type': ['sf'],
-                'n_queries': [0, 2, 4, 6, 8],
-                'expert_reliability': [1],
+                'n_queries': [0],
+                'init_queries': [0],
+                'expert_reliability': [1.0],
                 'struct_eq_type': ['linear'],
-                'steps': [3000],
-                'burn_in_steps': [1000],
-                'updates': [10]
+                'steps': [9000],
+                'burn_in_steps': [6000], # set = 1 to skip
+                'updates': [100] # can't be zero, set =1 to skip
                }
     
     # Generate list of variable permutations
