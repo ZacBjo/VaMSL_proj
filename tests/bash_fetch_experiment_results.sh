@@ -9,8 +9,8 @@
 #module load scicomp-python-env
 #export PYTHONPATH=$WRKDIR/PML_2024/VaMSL_proj:$PYTHONPATH
 
-source activate ../env/
+source activate ../vamsl_env/
 
 export PYTHONUNBUFFERED=1 # force python to output print pronto
 # Each job will get an index from the list of experiment dicts
-python batch_experiment_results.py experiment_settings/1_source_2_components_d20_N200_S9000_U100_sf.json
+python batch_experiment_results.py experiment_settings/unreliable_expert_d20_N200_S3000_U10_sf.json

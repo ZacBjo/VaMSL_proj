@@ -106,12 +106,13 @@ def identify_classification_ordering(q_c, ground_truth_indicator):
         Outputs:
             order (array): array of with order of components
         """
+        labels = jnp.arange(q_c.shape[1])
         # Get target and predicited assignments
         y_target = ground_truth_indicator
         y_pred = [jnp.argmax(c_i) for c_i in q_c] 
 
         # Solve linear assignment problem maximizing correct assignments
-        cm = confusion_matrix(y_pred, y_target)        
+        cm = confusion_matrix(y_pred, y_target, labels=labels)        
         indexes = linear_sum_assignment(cm, maximize=True)
         
         # Return list of optimal allocations as order of components
@@ -265,6 +266,7 @@ def calculate_results(exp_settings_file, exp_num, seed=897, mixture=False):
         for component in range(n_components):
             # Get assigned ground truth graph and theta
             gt_i = order[component]
+            #graph_k, theta_k = ground_truth_gs[run][0], ground_truth_thetas[run][0]
             graph_k, theta_k = ground_truth_gs[run][gt_i], ground_truth_thetas[run][gt_i]
             # get data and sample held-out observations from ground truth model
             i_indicator = exp_settings['n_vars']

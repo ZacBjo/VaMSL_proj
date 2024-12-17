@@ -20,18 +20,18 @@ def __main__(*, filename='dump.json'):
     var_dict = {
                 'seed': [seed], 
                 'n_runs': [30], 
-                'mixing_rate': [[1.0, 0.0]],
+                'mixing_rate': [[0.3, 0.7]],
                 'n_particles': [15],
                 'n_vars': [20],
                 'n_observations': [200],
                 'graph_type': ['sf'],
-                'n_queries': [0],
+                'n_queries': [2],
                 'init_queries': [0],
-                'expert_reliability': [1.0],
+                'expert_reliability': [1.0, 0.8, 0.6, 0.4, 0.2, 0.0],
                 'struct_eq_type': ['linear'],
-                'steps': [9000],
-                'burn_in_steps': [6000], # set = 1 to skip
-                'updates': [100] # can't be zero, set =1 to skip
+                'steps': [3000],
+                'burn_in_steps': [1000], # set = 1 to skip
+                'updates': [10] # can't be zero, set =1 to skip
                }
     
     # Generate list of variable permutations

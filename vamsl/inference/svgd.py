@@ -151,7 +151,7 @@ class MixtureJointDiBS(MixtureDiBS):
         return z, theta
     
 
-    def _sample_intial_component_particles(self, *, key, n_components, n_particles, n_dim=None):
+    def _sample_intial_component_particles(self, *, key, n_components, n_particles, n_dim=None, linear=True):
         """
         Samples random particles to initialize SVGD components
 
@@ -170,10 +170,19 @@ class MixtureJointDiBS(MixtureDiBS):
         
         # sample particles for all components
         key, *batch_subk = random.split(key, n_components+1)
-        q_z, q_theta = vmap(self._sample_initial_random_particles, (0, None, None), 0)(jnp.array(batch_subk),
-                                                                                       n_particles,
-                                                                                       n_dim)
-        
+
+        if linear:
+            q_z, q_theta = vmap(self._sample_initial_random_particles, (0, None, None), 0)(jnp.array(batch_subk),
+                                                                                           n_particles,
+                                                                                           n_dim)
+        else:
+            # non-linear parameters don't support vectorized mapping, replace with list comprehension
+            subks = jnp.array(batch_subk)
+            q_z_theta = [(self._sample_initial_random_particles(key, n_particles, n_dim)) for subk in subks]
+            # unpack results
+            q_z = jnp.stack([jnp.array(q_z_theta_k[0]) for q_z_theta_k in q_z_theta], axis=0)
+            q_theta = [q_z_theta_k[1] for q_z_theta_k in q_z_theta]
+                                                                                             
         return q_z, q_theta
 
 
@@ -268,7 +277,6 @@ class MixtureJointDiBS(MixtureDiBS):
         Returns
             transform vector of shape ``[d, k, 2]`` for the particle ``single_z``
         """
-
         # compute terms in sum
         weighted_gradient_ascent = kxx[..., None, None, None] * grad_log_prob_z
         repulsion = self._eltwise_grad_kernel_z(z, theta, single_z, single_theta)
@@ -309,7 +317,6 @@ class MixtureJointDiBS(MixtureDiBS):
         Returns:
             transform vector PyTree with leading dim ``n_particles`` for the particle ``single_theta``
         """
-
         # compute terms in sum
         weighted_gradient_ascent = tree_map(
             lambda leaf_theta_grad: expand_by(kxx, leaf_theta_grad.ndim - 1) * leaf_theta_grad,
@@ -438,13 +445,19 @@ class MixtureJointDiBS(MixtureDiBS):
     
 
     # Update SVGD approximations across components
-    def _compwise_sample_component(self, t, steps, subkeys, q_c, q_z, q_theta, sf_baselines, E):
-        return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, q_c, q_z, 
-                                                                            q_theta, sf_baselines, E)
+    def _compwise_sample_component(self, t, steps, subkeys, q_c, q_z, q_theta, sf_baselines, E, linear=True):
+        if linear:
+            return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, q_c, q_z, 
+                                                                                q_theta, sf_baselines, E)
+        else:
+            # non-linear parameters don't support vectorized mapping, replace with inbuilt map
+            ts, steps = q_z.shape[0]*[t], q_z.shape[0]*[steps]
+            q_z, q_theta, sf_baselines = map(self._sample_component, t, steps, subkeys, jnp.transpose(q_c), q_z, q_theta, sf_baselines, E)
+            return jnp.stack(q_z, axis=0), q_theta, sf_baselines        
     
     
     def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None,
-               q_c, init_q_z, init_q_theta, init_sf_baselines, E):
+               q_c, init_q_z, init_q_theta, init_sf_baselines, E, linear=True):
         """
         Use SVGD with DiBMS to sample ``[n_components, n_particles]`` particles.
 
@@ -479,7 +492,8 @@ class MixtureJointDiBS(MixtureDiBS):
                                                                          q_z=q_z, 
                                                                          q_theta=q_theta,
                                                                          sf_baselines=sf_baselines,
-                                                                         E=E)
+                                                                         E=E,
+                                                                         linear=linear)
             
             if callback:
                 for k in range(n_components):
@@ -512,7 +526,6 @@ class MixtureJointDiBS(MixtureDiBS):
             :class:`~dibs.metrics.ParticleDistribution`:
             particle distribution of graph and parameter samples and associated log probabilities
         """
-
         N, _, _ = g.shape
 
         # since theta continuous, each particle (G, theta) is unique always

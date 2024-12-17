@@ -3,6 +3,10 @@ import jax
 import jax.numpy as jnp
 from jax import vmap, random, grad
 from jax.nn import sigmoid, log_sigmoid
+from jax.scipy.special import logsumexp
+from scipy.optimize import linear_sum_assignment
+from jax.scipy.special import digamma
+from jax.random import categorical
 
 from vamsl.inference import MixtureJointDiBS
 from vamsl.metrics import ParticleDistribution, neg_ave_log_likelihood 
@@ -11,8 +15,6 @@ from vamsl.utils.func import stable_softmax
 from vamsl.graph_utils import elwise_acyclic_constr_nograd
 from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.utils.func import expand_by, zero_diagonal
-
-from scipy.optimize import linear_sum_assignment
 
 
 class VaMSL(MixtureJointDiBS):
@@ -79,15 +81,16 @@ class VaMSL(MixtureJointDiBS):
         )
         
         
-    def initialize_posteriors(self, *, key, init_q_c, n_particles, E=None):
+    def initialize_posteriors(self, *, key, init_q_c, n_particles, E=None, linear=True):
         self.n_particles = n_particles
-        self.q_c = init_q_c
+        self.q_c = jnp.log(init_q_c)
         self.update_mixing_weigths()
         n_components = self.q_c.shape[1]
         self.q_z, self.q_theta = self._sample_intial_component_particles(key=key,
                                                                          n_components=n_components, 
                                                                          n_particles=n_particles,
-                                                                         n_dim=self.n_vars)
+                                                                         n_dim=self.n_vars,
+                                                                         linear=linear)
         
         self.sf_baselines = jnp.zeros((n_components, self.n_particles))
         
@@ -96,21 +99,13 @@ class VaMSL(MixtureJointDiBS):
         else:
             self.E = jnp.zeros((n_components, self.n_vars, self.n_vars))
 
-            
+
     def sample_assignments(self, key):
-        # sample assignments based on responsibilities
-        key, *subks = random.split(key, self.q_c.shape[0]+1)
-        make_choices = lambda subks, c_n, q_c: vmap(lambda subk, c_n, q_c_n: random.choice(key=subk, a=c_n, p=q_c_n, axis=0), 
-                                                    (0, None, 0))(subks, c_n, q_c)
-        get_assignments = lambda subk, c_n, q_c: jnp.eye(q_c.shape[1])[make_choices(subk, c_n, q_c)]
-        cs = get_assignments(jnp.array(subks), jnp.arange(self.q_c.shape[1]), self.q_c)
-        
-        assert(cs.shape == self.q_c.shape)
-        
-        return cs
-        
-        
-    def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None):
+        assignments = categorical(key=key, logits=self.q_c)
+        return jax.nn.one_hot(assignments, num_classes=self.q_c.shape[1])   
+
+    
+    def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None, linear=True):
         key, subk = random.split(key)
         # Sample observation assignments
         cs = self.sample_assignments(subk)
@@ -123,11 +118,12 @@ class VaMSL(MixtureJointDiBS):
                                                                 init_q_z=self.q_z, 
                                                                 init_q_theta=self.q_theta, 
                                                                 init_sf_baselines=self.sf_baselines,
-                                                                E=self.E)
+                                                                E=self.E,
+                                                                linear=linear)
 
     
     def update_mixing_weigths(self):
-        self.q_pi = (1 / self.x.shape[0]) * jnp.sum(self.q_c, axis=0)
+        self.q_pi = jnp.exp(logsumexp(self.q_c, axis=0)) + 10**-6 # constant for numeric stability
         
 
     def compute_responsibility(self, x_n, dist_k, pi_k):
@@ -135,7 +131,7 @@ class VaMSL(MixtureJointDiBS):
                                                     eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
                                                     x=jnp.array(x_n.reshape((1,-1))))
                                                       
-        return np.log(pi_k) + expected_log_lik
+        return expected_log_lik + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
     
     
     def update_responsibilities_and_weights(self):
@@ -156,11 +152,15 @@ class VaMSL(MixtureJointDiBS):
                                                                                                               component_dists[k], 
                                                                                                               self.q_pi[k]) for k in range(K)]))
         
+        unnorm_log_sum = logsumexp(unnorm_responsibilities, axis=1)
+        def log_normalize(unorm_log_c_n, unnorm_log_sum):
+            return unorm_log_c_n - unnorm_log_sum
+            
         # Get softmax-normalized component responsibilities
         # [n_observations, n_components]
-        responsibilities = vmap(lambda unorm_c_n: stable_softmax(unorm_c_n), (0))(unnorm_responsibilities)
+        log_responsibilities = vmap(log_normalize, (0, 0))(unnorm_responsibilities, unnorm_log_sum)
         
-        self.q_c = responsibilities
+        self.q_c = log_responsibilities
         self.update_mixing_weigths()
         
         
@@ -218,16 +218,17 @@ class VaMSL(MixtureJointDiBS):
     
     def get_posteriors(self):
         return self.q_z, self.q_theta, self.q_c, self.q_pi
-    
+
     
     def set_E(self, E):
         self.E = E
+
     
     def get_E(self):
         return self.E
     
     #
-    #Overriding functions
+    # Overriding functions for conditional graph information (prior and elicited)  
     #
     
     def particle_to_g_lim(self, z, E_k):
@@ -256,10 +257,6 @@ class VaMSL(MixtureJointDiBS):
         return vmap(self.eltwise_particle_to_g_lim, (0, 0))(q_z, E)
     
     
-    #
-    # Overriding functions for conditional graph information (prior and elicited)  
-    #
-    
     #@override
     def particle_to_soft_graph(self, z, eps, t, E_k):
         """
@@ -279,7 +276,6 @@ class VaMSL(MixtureJointDiBS):
         # eps ~ Logistic(0,1)
         #soft_graph = sigmoid(self.tau * (eps + self.alpha(t) * scores)) #original
         soft_graph = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.tau * (eps + self.alpha(t) * scores)) # TEST
-
 
         # mask diagonal since it is explicitly not modeled
         return zero_diagonal(soft_graph)

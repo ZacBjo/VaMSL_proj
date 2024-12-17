@@ -92,6 +92,10 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         pass
     """
     n_components = mixing_rate.shape[0]
+    if struct_eq_type == 'linear':
+        linear = True
+    else:
+        linear = False
     # Generate data for experiment
     print('Generating data...')
     key, subk = random.split(key)
@@ -113,12 +117,13 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         k = np.random.randint(0, K) # randomly assign each datapoint to a cluster a priori
         c[n,k] = 1
     q_c = jnp.array(c)
+    q_c = 1/n_components * jnp.ones((x.shape[0], n_components))
 
     print('Creating VaMSL...')
     # Create VaMSL and initialize posteriors (remove indicator vecor from dataset)
     vamsl = VaMSL(x=x, graph_model=graph_model, mixture_likelihood_model=lik, component_likelihood_model=component_lik)
     key, subk = random.split(key)
-    vamsl.initialize_posteriors(key=subk, init_q_c=q_c, n_particles=n_particles)
+    vamsl.initialize_posteriors(key=subk, init_q_c=q_c, n_particles=n_particles)#, linear=linear)
     E = jnp.zeros((n_components, n_vars, n_vars))
    
     # If queries, create necessary objects
@@ -151,9 +156,11 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
                 # Add the edge to the component's elicitation matrix
                 E[component, i, j] = 1
 
+        E = jnp.array(E)
+
     print(f'Initial edges in E: {jnp.count_nonzero(E)}')
     # Update VaMSL's elicitation matrix
-    vamsl.set_E(jnp.array(E))
+    vamsl.set_E(E)
 
     #
     # start of posterior inference
@@ -166,11 +173,15 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
         print(f'step: {n_steps}')
         # Time of posterior inference
         t1 = time.time()
+        posts = vamsl.get_posteriors()
+        print(f'shape: {posts[0].shape}')
         # Update to optimal q(c) and q(\pi)
+        print('...updating weights and responsibilities')
         vamsl.update_responsibilities_and_weights()
         # Optimize q(Z, \Theta)
+        print('...updating particle positions')
         key, subk = random.split(key)
-        vamsl.update_particle_posteriors(key=subk, steps=n_steps)
+        vamsl.update_particle_posteriors(key=subk, steps=n_steps)#, linear=linear)
         dt += time.time() - t1
 
         # Elicitation if queries
@@ -211,7 +222,7 @@ def experiment_replication(key, n_particles, n_vars, n_observations,
     vamsl.update_responsibilities_and_weights()
     # Sample final particle posteriors q(Z, \Theta)
     key, subk = random.split(key)
-    vamsl.update_particle_posteriors(key=subk, steps=steps-burn_in_steps)
+    vamsl.update_particle_posteriors(key=subk, steps=steps-burn_in_steps)#, linear=linear)
     dt += time.time() - t1
 
     print('Returning results...')
