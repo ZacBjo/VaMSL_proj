@@ -82,34 +82,84 @@ class VaMSL(MixtureJointDiBS):
         
         
     def initialize_posteriors(self, *, key, init_q_c, n_particles, E=None, linear=True):
-        self.n_particles = n_particles
+        """
+        Initializes variational posteriors for mixing weights q(\pi) and embbedded graph and paramter 
+        particles q(Z, \Theta).
+
+        Args:
+            key (ndarray): prng key
+            init_q_c (ndarray): Initial assignment probabilities of shape ``[n_observations, n_components]``
+            n_particles (int): Number of SVGD particles per component. 
+            E (ndarray): Matrix of elicited hard edge constraints of shape ``[n_components, n_vars, n_vars]``
+            linear (boolean): Boolean value for using (non-)linear SCMs as nonlinear parameters require 
+                              different datatype for storing. 
+
+        Returns:
+            None
+
+        """
+        # Set initial responsibilities and update mixing weights 
         self.q_c = jnp.log(init_q_c)
         self.update_mixing_weigths()
+        
         n_components = self.q_c.shape[1]
+        # Sample initial emmbedded graph and paramter particles 
         self.q_z, self.q_theta = self._sample_intial_component_particles(key=key,
                                                                          n_components=n_components, 
-                                                                         n_particles=n_particles,
+                                                                         n_particles=self.n_particles,
                                                                          n_dim=self.n_vars,
                                                                          linear=linear)
         
-        self.sf_baselines = jnp.zeros((n_components, self.n_particles))
-        
-        if E or self.E:
+        self.sf_baselines = jnp.zeros((n_components, self.n_particles)) #not used, but expected as input by DiBS
+        # If given, set elicitation matrix
+        if E:
             self.E = E
         else:
             self.E = jnp.zeros((n_components, self.n_vars, self.n_vars))
-
+            
+    #
+    # q(z, \Theta) CAVI update
+    #
 
     def sample_assignments(self, key):
+        """
+        Samples component assignments based on variational assignment distribution q(c).
+
+        Args:
+            key (ndarray): prng key
+
+        Returns:
+           one_hot_assignments (ndarray): One hot assignemnt vectors of shape ``[n_observations, n_components]``
+
+        """
+        # Sample assignments from categorical distribution parametrized by responsibilities
         assignments = categorical(key=key, logits=self.q_c)
-        return jax.nn.one_hot(assignments, num_classes=self.q_c.shape[1])   
+        # Construct matrix of one-hot vectors from sampled assignmnets
+        one_hot_assignments = jax.nn.one_hot(assignments, num_classes=self.q_c.shape[1])
+        
+        return one_hot_assignments
 
     
     def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None, linear=True):
+        """
+        Initializes variational posteriors for mixing weights q(\pi) and embbedded graph and paramter 
+        particles q(Z, \Theta). If no  
+
+        Args:
+            key (ndarray): prng key
+            steps (int): number of SVGD steps performed 
+            callback: function to be called every ``callback_every`` steps of SVGD.
+            callback_every: if ``None``, ``callback`` is only called after particle updates have finished
+            linear (boolean): Boolean value for using (non-)linear SCMs as nonlinear parameters require 
+                              different datatype for storing. 
+
+        Returns:
+            None
+
+        """
         key, subk = random.split(key)
         # Sample observation assignments
         cs = self.sample_assignments(subk)
-        
         # Sample new variational posteriors for graphs and parameters
         self.q_z, self.q_theta, self.sf_baselines = self.sample(key=key, n_particles=self.n_particles, 
                                                                 steps=steps, callback=callback, 
@@ -122,19 +172,61 @@ class VaMSL(MixtureJointDiBS):
                                                                 linear=linear)
 
     
+    #
+    # q(\pi) CAVI update
+    #
+    
     def update_mixing_weigths(self):
+        """
+        CAVI update for variational mixing weight distribution q(\pi).
+
+        Args:
+            None 
+
+        Returns:
+            None
+
+        """
         self.q_pi = jnp.exp(logsumexp(self.q_c, axis=0)) + 10**-6 # constant for numeric stability
         
 
-    def compute_responsibility(self, x_n, dist_k, pi_k):
+    #
+    # q(c) CAVI update
+    #
+    
+    def compute_log_responsibility(self, x_n, dist_k, pi_k):
+        """
+        Compute component responsibility for single observation.
+
+        Args:
+            x_n (ndarray): Single observation of shape ``[]``
+            dist_k (:class:`dibs.metrics.ParticleDistribution`): particle distribution for component k
+            pi_k (float): Mixing weight for component k
+
+        Returns:
+            log_responsibility (float): log responsibility for component k with respect to observation x_n
+
+        """
         expected_log_lik = - neg_ave_log_likelihood(dist=dist_k,
                                                     eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
                                                     x=jnp.array(x_n.reshape((1,-1))))
+        
+        log_responsibility = expected_log_lik + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
                                                       
-        return expected_log_lik + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
+        return log_responsibility
     
     
     def update_responsibilities_and_weights(self):
+        """
+        CAVI updates for variational assigment and mixing weight distributions.
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        """
         N = self.x.shape[0]
         K = self.q_c.shape[1]
         
@@ -148,9 +240,9 @@ class VaMSL(MixtureJointDiBS):
         
         # Get unnormalized repsonsiibilities for components (list comprehension since component_dists can differ in size)
         # [n_observations, n_components]
-        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_responsibility, (0, None, None))(self.x, 
-                                                                                                              component_dists[k], 
-                                                                                                              self.q_pi[k]) for k in range(K)]))
+        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(self.x, 
+                                                                                                                  component_dists[k], 
+                                                                                                                  self.q_pi[k]) for k in range(K)]))
         
         unnorm_log_sum = logsumexp(unnorm_responsibilities, axis=1)
         def log_normalize(unorm_log_c_n, unnorm_log_sum):
@@ -160,56 +252,9 @@ class VaMSL(MixtureJointDiBS):
         # [n_observations, n_components]
         log_responsibilities = vmap(log_normalize, (0, 0))(unnorm_responsibilities, unnorm_log_sum)
         
+        # Update variational distributions for responsibilities and mixing weights 
         self.q_c = log_responsibilities
         self.update_mixing_weigths()
-        
-        
-    def visualize_posteriors(self, callback, steps=0):
-        for k in range(self.q_c.shape[1]):
-            callback(dibs=self,
-                     t=steps,
-                     k=k+1,
-                     zs=self.q_z[k],
-                     thetas=self.q_theta[k],
-                     E_k=self.E[k],
-                     ipython=True if k < n_components-1 else False)
-    
-    
-    def component_classification_accuracy(self, *, component, c_k_targets):
-        # TODO
-        pass
-
-    
-    def identify_ordering(self, *, mixture_data):
-        """
-        Identify component indices based on n_componets number of ground truth graphs
-        
-        Args:
-            mixture_data (ndarray): ndarray of shape [n_components, n_observations, n_vars] with data for each component.
-            
-        Outputs:
-            order (array): array of with order of components
-        """
-        # [n_components, n_particles, n_vars, n_vars]
-        component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
-        
-        # Get particle distributions for each component (list comprhension since get_empirical is impure)
-        # [n_components, ParticleDistribution]
-        component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(self.q_c.shape[1])]
-        
-        # expected log lik
-        e_log_lik = lambda dist, x: -neg_ave_log_likelihood(dist=dist,
-                                                            eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
-                                                            x=x)
-        
-        # Calculate log likelihood of all components for data
-        cost_matrix = [[e_log_lik(dist, data) for data in mixture_data] for dist in component_dists]
-        
-        # use Hungaraian algorithm to find optimal allocation
-        assignments = linear_sum_assignment(cost_matrix)
-        
-        # Return list of optimal allocations as order of components
-        return assignments[1]
     
     
     #
@@ -217,15 +262,49 @@ class VaMSL(MixtureJointDiBS):
     #
     
     def get_posteriors(self):
+    """
+    Returns all variational posteriors.
+    
+    Args:
+        None
+        
+    Returns:
+        q_z (ndarray): Embedded graph particles of shape ``[n_components, n_particles, n_vars, l_dim, 2]``
+        q_theta (Any): PyTree with leading dim ``n_particles``
+        q_c (ndarray): Component log responsibilities of shape ``[n_observations, n_components]`` 
+        q_pi (ndarray): Mixing weights of shape ``[n_components,]`` 
+        
+    """
         return self.q_z, self.q_theta, self.q_c, self.q_pi
 
     
     def set_E(self, E):
+    """
+    Sets elicitation matrix.
+    
+    Args:
+        E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
+        
+    Returns:
+        None
+        
+    """ 
         self.E = E
 
     
     def get_E(self):
+    """
+    Returns elicitation matrix.
+    
+    Args:
+        None
+        
+    Returns:
+        E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
+        
+    """
         return self.E
+    
     
     #
     # Overriding functions for conditional graph information (prior and elicited)  
@@ -324,3 +403,55 @@ class VaMSL(MixtureJointDiBS):
         # mask diagonal since it is explicitly not modeled
         # NOTE: this is not technically log(p), but the way `edge_log_probs_` is used, this is correct
         return zero_diagonal(log_probs), zero_diagonal(log_probs_neg)
+
+    
+    #
+    # Functionalities
+    #
+        
+    def visualize_posteriors(self, callback, steps=0):
+        for k in range(self.q_c.shape[1]):
+            callback(dibs=self,
+                     t=steps,
+                     k=k+1,
+                     zs=self.q_z[k],
+                     thetas=self.q_theta[k],
+                     E_k=self.E[k],
+                     ipython=True if k < n_components-1 else False)
+    
+    
+    def component_classification_accuracy(self, *, component, c_k_targets):
+        # TODO
+        pass
+
+    
+    def identify_ordering(self, *, mixture_data):
+        """
+        Identify component indices based on n_componets number of ground truth graphs
+        
+        Args:
+            mixture_data (ndarray): ndarray of shape [n_components, n_observations, n_vars] with data for each component.
+            
+        Returns:
+            order (array): array of with order of components
+        """
+        # [n_components, n_particles, n_vars, n_vars]
+        component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
+        
+        # Get particle distributions for each component (list comprhension since get_empirical is impure)
+        # [n_components, ParticleDistribution]
+        component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(self.q_c.shape[1])]
+        
+        # expected log lik
+        e_log_lik = lambda dist, x: -neg_ave_log_likelihood(dist=dist,
+                                                            eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
+                                                            x=x)
+        
+        # Calculate log likelihood of all components for data
+        cost_matrix = [[e_log_lik(dist, data) for data in mixture_data] for dist in component_dists]
+        
+        # use Hungaraian algorithm to find optimal allocation
+        assignments = linear_sum_assignment(cost_matrix)
+        
+        # Return list of optimal allocations as order of components
+        return assignments[1]
