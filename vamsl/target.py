@@ -1,9 +1,11 @@
+import numpy as np
 import jax.numpy as jnp
 from jax import random
 
 from vamsl.models.graph import ErdosReniDAGDistribution, ScaleFreeDAGDistribution, UniformDAGDistributionRejection
 from vamsl.graph_utils import graph_to_mat
 
+from vamsl.models import MixtureLinearGaussian, MixtureDenseNonlinearGaussian
 from vamsl.models import LinearGaussian, DenseNonlinearGaussian
 
 from typing import Any, NamedTuple
@@ -319,3 +321,62 @@ def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
         n_ho_observations=n_ho_observations)
 
     return data, graph_model, likelihood_model
+
+
+def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, struct_eq_type):
+    """
+    Generate data for one experiment run. Data is generated from n_components number of randomly generated graphs. 
+    The data is stacked and then shuffled.
+    
+    Args:
+        subk (KeyArrayLike): PRNG key.
+        n_components (int): number of components in mixture model.
+        n_vars (int): number of variables in graph (d).
+        n_observations (array): number of observations per component.
+        graph_type (str): prior for generated graph type ('er' or 'sf').
+        struct_eq_type (str): class of equations (linear or non-linear).
+        
+    Output:
+        pass
+    """    
+    # Generate either linear or non-linear data
+    if struct_eq_type == "linear":
+        make_data_model = make_linear_gaussian_model
+        likelihood_model =  MixtureLinearGaussian(n_vars=n_vars)
+    elif struct_eq_type == 'nonlinear':
+        make_data_model = make_nonlinear_gaussian_model
+        likelihood_model =  MixtureDenseNonlinearGaussian(n_vars=n_vars)
+    else:
+        raise ValueError(f'Supplied unknown data_model: {data_model}. Should be either linear or non-linear.')
+    
+    # Determine number of observations per component based on mixing rates
+    comp_observations = jnp.floor(n_observations * mixing_rate)
+    
+    xs = []
+    graphs = []
+    thetas = []
+    # loop over components
+    key, *subks = random.split(key, len(mixing_rate)+1) # Generate subkeys for each component
+    for subk, n_comp_obs in zip(jnp.array(subks), comp_observations):
+        data, graph_model, component_lik_model = make_data_model(key=subk, n_vars=n_vars, 
+                                                                 graph_prior_str=graph_type,
+                                                                 n_observations=int(n_comp_obs.item()))    
+        xs.append(data.x)
+        graphs.append(data.g)
+        thetas.append(data.theta)
+    
+    # Combine observation sets
+    x = np.concatenate(xs, axis=0) # numpy array to be mutable
+    graphs = jnp.array(graphs)
+    if struct_eq_type == "linear":
+        thetas = jnp.array(thetas)
+    
+    # Add ground truth indicator for components
+    indicator = np.concatenate([k * np.ones(int(comp_observations[k].item())) for k in range(comp_observations.shape[0])],axis=0).reshape((-1,1))
+    indicated_x = np.hstack([x, indicator])
+    
+    # shuffle data (numpy shuffle is in-place)
+    np.random.shuffle(x)
+    
+    # Return data sets
+    return jnp.array(indicated_x), graphs, thetas, likelihood_model, component_lik_model, graph_model
