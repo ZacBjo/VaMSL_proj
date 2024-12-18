@@ -451,8 +451,13 @@ class MixtureJointDiBS(MixtureDiBS):
         else:
             # non-linear parameters don't support vectorized mapping, replace with inbuilt map
             ts, steps = q_z.shape[0]*[t], q_z.shape[0]*[steps]
-            q_z, q_theta, sf_baselines = map(self._sample_component, t, steps, subkeys, jnp.transpose(cs), q_z, q_theta, sf_baselines, E)
-            return jnp.stack(q_z, axis=0), q_theta, sf_baselines        
+            q_z_theta_baselines = [q for q in map(self._sample_component, ts, steps, subkeys, jnp.transpose(cs), q_z, q_theta, sf_baselines, E)]
+            # Unpack results
+            q_z = jnp.stack([q_z_theta_baselines[k][0] for k in range(q_z.shape[0])], axis=0)
+            q_theta = [q_z_theta_baselines[k][1] for k in range(q_z.shape[0])]
+            sf_baselines = jnp.array([q_z_theta_baselines[k][2] for k in range(q_z.shape[0])])
+            
+            return q_z, q_theta, sf_baselines        
     
     
     def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None,
