@@ -346,6 +346,7 @@ class MixtureJointDiBS(MixtureDiBS):
 
         Args:
             t (int): step
+            c (ndarray): assignments of shape ``[n_observations, 1]``
             opt_state_z: optimizer state for latent :math:`Z` particles; contains ``[n_particles, d, k, 2]``
             opt_state_theta: optimizer state for parameter :math:`\\Theta` particles;
                 contains PyTree with ``n_particles`` leading dim
@@ -363,6 +364,7 @@ class MixtureJointDiBS(MixtureDiBS):
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
         dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
+        
         
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
@@ -402,16 +404,13 @@ class MixtureJointDiBS(MixtureDiBS):
         of one component :math:`p(G, \\Theta | D)` as defined by the BN model ``self.likelihood_model``
 
         Arguments:
-            key (ndarray): prng key
-            n_particles (int): number of particles to sample
+            t (int): step
             steps (int): number of SVGD steps performed
-            n_dim_particles (int): latent dimensionality :math:`k` of particles :math:`Z = \{ U, V \}`
-                with :math:`U, V \\in \\mathbb{R}^{k \\times d}`. Default is ``n_vars``
-            callback: function to be called every ``callback_every`` steps of SVGD.
-            callback_every: if ``None``, ``callback`` is only called after particle updates have finished
-            c (ndarray): responsibilities of shape ``[n_observations, 1]``
+            key (ndarray): prng key
+            c (ndarray): assignments of shape ``[n_observations, 1]``
             init_z (ndarray): latent :math:`Z` of component particles; contains ``[n_particles, d, k, 2]``
-
+            init_theta (PyTree): parameters :math:`\Theta` of component particles; contains ``[n_particles, d, d]
+            
         Returns:
             tuple of shape (``[n_particles, n_vars, n_vars]``, ``PyTree``) where ``PyTree`` has leading dimension ``n_particles``:
             batch of samples :math:`G, \\Theta \\sim p(G, \\Theta | D)`
@@ -445,21 +444,21 @@ class MixtureJointDiBS(MixtureDiBS):
     
 
     # Update SVGD approximations across components
-    def _compwise_sample_component(self, t, steps, subkeys, q_c, q_z, q_theta, sf_baselines, E, linear=True):
+    def _compwise_sample_component(self, t, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, linear=True):
         if linear:
-            return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, q_c, q_z, 
+            return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, cs, q_z, 
                                                                                 q_theta, sf_baselines, E)
         else:
             # non-linear parameters don't support vectorized mapping, replace with inbuilt map
             ts, steps = q_z.shape[0]*[t], q_z.shape[0]*[steps]
-            q_z, q_theta, sf_baselines = map(self._sample_component, t, steps, subkeys, jnp.transpose(q_c), q_z, q_theta, sf_baselines, E)
+            q_z, q_theta, sf_baselines = map(self._sample_component, t, steps, subkeys, jnp.transpose(cs), q_z, q_theta, sf_baselines, E)
             return jnp.stack(q_z, axis=0), q_theta, sf_baselines        
     
     
     def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None,
-               q_c, init_q_z, init_q_theta, init_sf_baselines, E, linear=True):
+               cs, init_q_z, init_q_theta, init_sf_baselines, E, linear=True):
         """
-        Use SVGD with DiBMS to sample ``[n_components, n_particles]`` particles.
+        Use SVGD with VaMSL to sample ``[n_components, n_particles]`` particles.
 
         Arguments:
             key (ndarray): prng key
@@ -469,7 +468,7 @@ class MixtureJointDiBS(MixtureDiBS):
                 with :math:`U, V \\in \\mathbb{R}^{k \\times d}`. Default is ``n_vars``
             callback: function to be called every ``callback_every`` steps of SVGD.
             callback_every: if ``None``, ``callback`` is only called after particle updates have finished
-            q_c (ndarray): array of shape ```[x.shape[0], n_components]``` for responsibilities of components w.r.t. datapoints
+            cs (ndarray): array of shape ```[x.shape[0], n_components]``` for assignments of components w.r.t. datapoints
 
         Returns:
             tuple of shape (``[n_particles, n_vars, n_vars]``, ``PyTree``) where ``PyTree`` has leading dimension ``n_particles``:
@@ -477,7 +476,7 @@ class MixtureJointDiBS(MixtureDiBS):
 
         """
         # number of columns in responsibility matrix determines number of components
-        n_components = q_c.shape[1]        
+        n_components = cs.shape[1]        
         q_z = init_q_z
         q_theta = init_q_theta
         sf_baselines = init_sf_baselines
@@ -488,7 +487,7 @@ class MixtureJointDiBS(MixtureDiBS):
             key, *batch_subk = random.split(key, n_components+1)
             q_z, q_theta, sf_baselines = self._compwise_sample_component(t, callback_every,
                                                                          subkeys=jnp.array(batch_subk),
-                                                                         q_c=q_c, 
+                                                                         cs=cs, 
                                                                          q_z=q_z, 
                                                                          q_theta=q_theta,
                                                                          sf_baselines=sf_baselines,

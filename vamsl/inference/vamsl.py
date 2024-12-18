@@ -22,7 +22,7 @@ class VaMSL(MixtureJointDiBS):
                  x,
                  q_z=None,
                  q_theta=None,
-                 q_c=None,
+                 log_q_c=None,
                  q_pi = None,
                  sf_baselines = None,
                  E = None,
@@ -46,7 +46,7 @@ class VaMSL(MixtureJointDiBS):
                  verbose=False):
         self.q_z = q_z
         self.q_theta = q_theta
-        self.q_c = q_c
+        self.log_q_c = log_q_c
         self.q_pi = q_pi
         self.E = E
         self.n_particles = n_particles
@@ -98,11 +98,12 @@ class VaMSL(MixtureJointDiBS):
             None
 
         """
+        self.n_particles = n_particles
         # Set initial responsibilities and update mixing weights 
-        self.q_c = jnp.log(init_q_c)
+        self.log_q_c = jnp.log(init_q_c)
         self.update_mixing_weigths()
         
-        n_components = self.q_c.shape[1]
+        n_components = self.log_q_c.shape[1]
         # Sample initial emmbedded graph and paramter particles 
         self.q_z, self.q_theta = self._sample_intial_component_particles(key=key,
                                                                          n_components=n_components, 
@@ -133,9 +134,9 @@ class VaMSL(MixtureJointDiBS):
 
         """
         # Sample assignments from categorical distribution parametrized by responsibilities
-        assignments = categorical(key=key, logits=self.q_c)
+        assignments = categorical(key=key, logits=self.log_q_c)
         # Construct matrix of one-hot vectors from sampled assignmnets
-        one_hot_assignments = jax.nn.one_hot(assignments, num_classes=self.q_c.shape[1])
+        one_hot_assignments = jax.nn.one_hot(assignments, num_classes=self.log_q_c.shape[1])
         
         return one_hot_assignments
 
@@ -161,10 +162,12 @@ class VaMSL(MixtureJointDiBS):
         # Sample observation assignments
         cs = self.sample_assignments(subk)
         # Sample new variational posteriors for graphs and parameters
-        self.q_z, self.q_theta, self.sf_baselines = self.sample(key=key, n_particles=self.n_particles, 
-                                                                steps=steps, callback=callback, 
+        self.q_z, self.q_theta, self.sf_baselines = self.sample(key=key, 
+                                                                n_particles=self.n_particles, 
+                                                                steps=steps, 
+                                                                callback=callback, 
                                                                 callback_every=callback_every, 
-                                                                q_c=cs,
+                                                                cs=cs,
                                                                 init_q_z=self.q_z, 
                                                                 init_q_theta=self.q_theta, 
                                                                 init_sf_baselines=self.sf_baselines,
@@ -187,7 +190,7 @@ class VaMSL(MixtureJointDiBS):
             None
 
         """
-        self.q_pi = jnp.exp(logsumexp(self.q_c, axis=0)) + 10**-6 # constant for numeric stability
+        self.q_pi = jnp.exp(logsumexp(self.log_q_c, axis=0)) + 10**-6 # constant for numeric stability
         
 
     #
@@ -228,7 +231,7 @@ class VaMSL(MixtureJointDiBS):
 
         """
         N = self.x.shape[0]
-        K = self.q_c.shape[1]
+        K = self.log_q_c.shape[1]
         
         # Get graphs for MC-estimating expected data log likelihoods
         # [n_components, n_particles, n_vars, n_vars]
@@ -253,7 +256,7 @@ class VaMSL(MixtureJointDiBS):
         log_responsibilities = vmap(log_normalize, (0, 0))(unnorm_responsibilities, unnorm_log_sum)
         
         # Update variational distributions for responsibilities and mixing weights 
-        self.q_c = log_responsibilities
+        self.log_q_c = log_responsibilities
         self.update_mixing_weigths()
     
     
@@ -262,47 +265,47 @@ class VaMSL(MixtureJointDiBS):
     #
     
     def get_posteriors(self):
-    """
-    Returns all variational posteriors.
-    
-    Args:
-        None
-        
-    Returns:
-        q_z (ndarray): Embedded graph particles of shape ``[n_components, n_particles, n_vars, l_dim, 2]``
-        q_theta (Any): PyTree with leading dim ``n_particles``
-        q_c (ndarray): Component log responsibilities of shape ``[n_observations, n_components]`` 
-        q_pi (ndarray): Mixing weights of shape ``[n_components,]`` 
-        
-    """
-        return self.q_z, self.q_theta, self.q_c, self.q_pi
+        """
+        Returns all variational posteriors.
+
+        Args:
+            None
+
+        Returns:
+            q_z (ndarray): Embedded graph particles of shape ``[n_components, n_particles, n_vars, l_dim, 2]``
+            q_theta (Any): PyTree with leading dim ``n_particles``
+            log_q_c (ndarray): Component log responsibilities of shape ``[n_observations, n_components]`` 
+            q_pi (ndarray): Mixing weights of shape ``[n_components,]`` 
+
+        """
+        return self.q_z, self.q_theta, self.log_q_c, self.q_pi
 
     
     def set_E(self, E):
-    """
-    Sets elicitation matrix.
-    
-    Args:
-        E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
-        
-    Returns:
-        None
-        
-    """ 
+        """
+        Sets elicitation matrix.
+
+        Args:
+            E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
+
+        Returns:
+            None
+
+        """ 
         self.E = E
 
     
     def get_E(self):
-    """
-    Returns elicitation matrix.
-    
-    Args:
-        None
-        
-    Returns:
-        E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
-        
-    """
+        """
+        Returns elicitation matrix.
+
+        Args:
+            None
+
+        Returns:
+            E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
+
+        """
         return self.E
     
     
@@ -410,7 +413,7 @@ class VaMSL(MixtureJointDiBS):
     #
         
     def visualize_posteriors(self, callback, steps=0):
-        for k in range(self.q_c.shape[1]):
+        for k in range(self.log_q_c.shape[1]):
             callback(dibs=self,
                      t=steps,
                      k=k+1,
@@ -440,7 +443,7 @@ class VaMSL(MixtureJointDiBS):
         
         # Get particle distributions for each component (list comprhension since get_empirical is impure)
         # [n_components, ParticleDistribution]
-        component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(self.q_c.shape[1])]
+        component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(self.log_q_c.shape[1])]
         
         # expected log lik
         e_log_lik = lambda dist, x: -neg_ave_log_likelihood(dist=dist,
