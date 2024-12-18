@@ -102,7 +102,7 @@ class MixtureDenseNonlinearGaussian:
             Choices: ``sigmoid``, ``tanh``, ``relu``, ``leakyrelu``
 
     """
-    def __init__(self, *, n_vars, hidden_layers=[5,5], obs_noise=0.1, sig_param=1.0, activation='relu', bias=True):
+    def __init__(self, *, n_vars, hidden_layers=(5,), obs_noise=0.1, sig_param=1.0, activation='relu', bias=True):
         self.n_vars = n_vars
         self.obs_noise = obs_noise
         self.sig_param = sig_param

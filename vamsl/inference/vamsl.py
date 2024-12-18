@@ -59,7 +59,7 @@ class VaMSL(MixtureJointDiBS):
         self.eltwise_component_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
             component_likelihood_model.interventional_log_joint_prob(g, theta, x_ho, interv_msk_ho, None), (0, 0, None, None), 0)
 
-        # init MDiBS SVGD superclass methods
+        # init VaMSL SVGD superclass methods
         super().__init__(
             x=x,
             graph_model=graph_model,
@@ -83,7 +83,7 @@ class VaMSL(MixtureJointDiBS):
         
     def initialize_posteriors(self, *, key, init_q_c, n_particles, E=None, linear=True):
         """
-        Initializes variational posteriors for mixing weights q(\pi) and embbedded graph and paramter 
+        Initializes variational posteriors for mixing weights q(\pi) and embbedded graph and parameter 
         particles q(Z, \Theta).
 
         Args:
@@ -230,9 +230,7 @@ class VaMSL(MixtureJointDiBS):
             None
 
         """
-        N = self.x.shape[0]
         K = self.log_q_c.shape[1]
-        
         # Get graphs for MC-estimating expected data log likelihoods
         # [n_components, n_particles, n_vars, n_vars]
         component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
