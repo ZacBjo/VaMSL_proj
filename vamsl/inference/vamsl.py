@@ -24,6 +24,7 @@ class VaMSL(MixtureJointDiBS):
                  q_theta=None,
                  log_q_c=None,
                  q_pi = None,
+                 alphas = None,
                  sf_baselines = None,
                  E = None,
                  n_particles = None,
@@ -48,6 +49,7 @@ class VaMSL(MixtureJointDiBS):
         self.q_theta = q_theta
         self.log_q_c = log_q_c
         self.q_pi = q_pi
+        self.alphas = alphas
         self.E = E
         self.n_particles = n_particles
         self.sf_baselines = sf_baselines
@@ -114,8 +116,10 @@ class VaMSL(MixtureJointDiBS):
         if alphas is None:
             # Default to uniform dirichlet
             self.q_pi = jnp.ones((n_components))
+            self.alphas = jnp.ones((n_components))
         else:
             self.q_pi = alphas
+            self.alphas = alphas
             
         # Sample initial emmbedded graph and paramter particles 
         self.q_z, self.q_theta = self._sample_intial_component_particles(key=key,
@@ -203,7 +207,7 @@ class VaMSL(MixtureJointDiBS):
             None
 
         """
-        self.q_pi = jnp.exp(logsumexp(self.log_q_c, axis=0)) + 10**-6 # constant for numeric stability
+        self.q_pi = self.alphas + jnp.exp(logsumexp(self.log_q_c, axis=0)) + 10**-6 # constant for numeric stability
         
 
     #
