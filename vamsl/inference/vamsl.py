@@ -81,15 +81,17 @@ class VaMSL(MixtureJointDiBS):
         )
         
         
-    def initialize_posteriors(self, *, key, init_q_c, n_particles, E=None, linear=True):
+    def initialize_posteriors(self, *, key, n_components, n_particles, init_q_c=None, alphas=None, E=None, linear=True):
         """
         Initializes variational posteriors for mixing weights q(\pi) and embbedded graph and parameter 
         particles q(Z, \Theta).
 
         Args:
             key (ndarray): prng key
-            init_q_c (ndarray): Initial assignment probabilities of shape ``[n_observations, n_components]``
+            n_components (int): Number of components in mixture model
             n_particles (int): Number of SVGD particles per component. 
+            init_q_c (ndarray): Initial assignment probabilities of shape ``[n_observations, n_components]``
+            alphas (int): Prior hyperparameters for distribution over mixing weights
             E (ndarray): Matrix of elicited hard edge constraints of shape ``[n_components, n_vars, n_vars]``
             linear (boolean): Boolean value for using (non-)linear SCMs as nonlinear parameters require 
                               different datatype for storing. 
@@ -99,11 +101,22 @@ class VaMSL(MixtureJointDiBS):
 
         """
         self.n_particles = n_particles
-        # Set initial responsibilities and update mixing weights 
-        self.log_q_c = jnp.log(init_q_c)
-        self.update_mixing_weigths()
-        
-        n_components = self.log_q_c.shape[1]
+        # Set initial responsibilities
+        if init_q_c is None:
+            # Default to uniform responsibilities
+            uniform_q_c = 1/n_components * jnp.ones((self.x.shape[0], n_components))
+            self.log_q_c = jnp.log(uniform_q_c) 
+        else:
+            self.log_q_c = jnp.log(init_q_c)
+            n_components = self.log_q_c.shape[1]
+         
+        # Set initial mixing weights
+        if alphas is None:
+            # Default to uniform dirichlet
+            self.q_pi = jnp.ones((n_components))
+        else:
+            self.q_pi = alphas
+            
         # Sample initial emmbedded graph and paramter particles 
         self.q_z, self.q_theta = self._sample_intial_component_particles(key=key,
                                                                          n_components=n_components, 
@@ -113,10 +126,10 @@ class VaMSL(MixtureJointDiBS):
         
         self.sf_baselines = jnp.zeros((n_components, self.n_particles)) #not used, but expected as input by DiBS
         # If given, set elicitation matrix
-        if E:
-            self.E = E
-        else:
+        if E is None:
             self.E = jnp.zeros((n_components, self.n_vars, self.n_vars))
+        else:
+            self.E = E 
             
     #
     # q(z, \Theta) CAVI update
