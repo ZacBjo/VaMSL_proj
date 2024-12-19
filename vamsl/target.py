@@ -372,10 +372,10 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
         thetas = jnp.array(thetas)
     
     # Add ground truth indicator for components
-    indicator = np.concatenate([k * np.ones(int(comp_observations[k].item())) for k in range(comp_observations.shape[0])], axis=0).reshape((-1,1))
+    indicator = np.concatenate([k * np.ones(int(comp_observations[k].item())) for k in range(comp_observations.shape[0])],axis=0).reshape((-1,1))
     indicated_x = np.hstack([x, indicator])
     
-    # Shuffle data (numpy shuffle is in-place)
+    # shuffle data (numpy shuffle is in-place)
     np.random.shuffle(indicated_x)
     
     # Return data sets
