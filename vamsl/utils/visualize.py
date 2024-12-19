@@ -18,6 +18,28 @@ def visualize_ground_truth(mat, size=4.0):
     return
 
 
+def visualize_ground_truths(mats, size=4.0, columns=7):
+    """    
+    `mats`: (n_ground_truths, d, d) 
+    """
+    cols = min(len(mats), columns)
+    rows = 1 + ((len(mats)-1)//cols)
+    plt.rcParams['figure.figsize'] = [cols*size, rows*size]
+    fig, axs = plt.subplots(rows, cols)
+    axs = axs.reshape((-1, cols))
+    [axs[i,j].set_axis_off() for i in range(rows) for j in range(cols)]
+    for n, mat in enumerate(mats):
+        i,j = n//cols, n%cols
+        axs[i,j].set_axis_on()
+        axs[i,j].matshow(mat, vmin=0, vmax=1)
+        plt.setp(axs[i,j].get_xticklabels(), visible=False)
+        plt.setp(axs[i,j].get_yticklabels(), visible=False)
+        axs[i,j].tick_params(axis='both', which='both', length=0)
+        axs[i,j].set_title(f'Ground truth graph {n+1}', pad=10)
+    plt.show()
+    return
+
+
 def visualize(mats, t, save_path=None, n_cols=7, size=2.5, show=False):
     """
     Based on visualization by https://github.com/JannerM/gamma-models/blob/main/gamma/visualization/pendulum.py
