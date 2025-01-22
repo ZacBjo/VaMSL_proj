@@ -376,7 +376,8 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
     indicated_x = np.hstack([x, indicator])
     
     # shuffle data (numpy shuffle is in-place)
-    np.random.shuffle(indicated_x)
+    #np.random.shuffle(indicated_x)
+    indicated_x = random.permutation(key, jnp.array(indicated_x))
     
     # Return data sets
-    return jnp.array(indicated_x), graphs, thetas, likelihood_model, component_lik_model, graph_model
+    return indicated_x, graphs, thetas, likelihood_model, component_lik_model, graph_model
