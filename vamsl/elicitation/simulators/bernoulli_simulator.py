@@ -2,20 +2,19 @@ import jax.numpy as jnp
 import jax.random as random
 
 class bernoulli_simulator:
-    #
-    #Simple experiment simulator used to simulate outcomes for queries about edge existence.
-    #
-    #An experiment either returns either 1 (indicating existing edge) or 0 (indicating missing edge).
-    #
-    #The experiment is simulated as a Bernoulli trial parametrized by an edge probability. 
-    #The edge probabilities arecalculated using the DiBS method.
-    #
-    #In the terminology of Rainforth et al. (2023). - Modern Bayesian Experimental Design:
-    #The parameter \theta: A [n_var, n_var] matrix of edge probabilities.
-    #The experiment \xi_{ij}: The query whether the edge i -> j exist in the graph.
-    #The outcome y_{ij}: A binary variable y_{ij} \in \{0,1\} idnidcating edge (non-)existence.
-    #The simulator p(y|\theta, \xi_[ij}): A bernoulli trial parametrized by the edge probability \theta_{ij}. 
-    #
+    """
+    Simple discrete experiment simulator used to simulate outcomes for queries about edge existence.
+    
+    An experiment either returns either 1 (indicating existing edge) or 0 (indicating missing edge).   
+    The experiment is simulated as a Bernoulli trial parametrized by an edge probability. 
+    The edge probabilities are calculated using the DiBS method.
+     
+    In the terminology of Rainforth et al. (2023) - Modern Bayesian Experimental Design:
+    - The parameter \theta: A [n_var, n_var] matrix of edge probabilities.
+    - The experiment \xi_{ij}: The query whether the edge i -> j exist in the graph.
+    - The outcome y_{ij}: A binary variable y_{ij} \in \{0,1\} idnidcating edge (non-)existence.
+    - The simulator p(y|\theta, \xi_[ij}): A bernoulli trial parametrized by the edge probability \theta_{ij}. 
+    """
     def __init__(self):
         pass
         
