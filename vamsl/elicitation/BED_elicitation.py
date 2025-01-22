@@ -36,6 +36,10 @@ class edgeElicitation:
         return RB_estimate
     
     
+    def nested_monte_carlo_EIG(self, experiment_liks):
+        pass
+    
+    
     def experiment_EIG(self, parameter_samples, experiment):
         # get experiment likelihoods p(y=1 | \theta, \xi_ij)
         experiment_liks = vmap(self.simulator.get_experiment_likelihood, (0, None))(parameter_samples, experiment)
