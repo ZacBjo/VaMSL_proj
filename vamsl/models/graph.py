@@ -2,9 +2,13 @@ import igraph as ig
 import random as pyrandom
 import jax.numpy as jnp
 from jax import random
+from jax import vmap
+from jax.scipy.stats import dirichlet, beta
 
 from vamsl.graph_utils import mat_to_graph, graph_to_mat, mat_is_dag
 from vamsl.utils.func import zero_diagonal
+
+from jax import debug
 
 
 class ErdosReniDAGDistribution:
@@ -274,3 +278,91 @@ class UniformDAGDistributionRejection:
 
         """
         return jnp.array(0.0)
+    
+
+class DirichletSimilarity:
+    """
+    Randomly-oriented scale-free random graph with power-law degree distribution.
+    The pmf is defined as
+
+    :math:`p(G) \\propto \\prod_j (1 + \\text{deg}(j))^{-3}`
+
+    where :math:`\\text{deg}(j)` denotes the in-degree of node :math:`j`
+
+    Args:
+        n_vars (int): number of variables in DAG
+        n_edges_per_node (int): number of edges sampled per variable
+
+    """
+
+    def __init__(self):
+        pass
+
+    def joint_log_prob_soft(self, *, soft_g, E, N):
+        """
+        Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
+
+        Args:
+            soft_g (ndarray): graph adjacency matrix, where entries
+                may be probabilities and not necessarily 0 or 1
+            E (ndarray): elcitied edge probabilities of shape
+            N (int): number of observations, scales the impact of expert beliefs on prior probs
+
+        Returns:
+            log joint probability corresponding to edge probabilities in :math:`G | E_soft`
+
+        """
+        # Mask hard constraints as uniform to remove their influence (hard constraints are applied via p(G|Z,E))
+        E = jnp.where(E == 1.0,
+                      0.5,
+                      jnp.where(E == 0.0, 
+                                0.5,
+                                # [n_observations, n_vars]
+                                E
+                               )
+                     )
+        
+        # Add noise to probabilities representing certanties for numeric stability 
+        soft_g = jnp.where(soft_g == 1.0,
+                           1.0-10**-10,
+                           jnp.where(soft_g == 0.0,
+                                     10**-10,
+                                     # [n_observations, n_vars]
+                                     soft_g
+                                    )
+                          )
+        """
+        
+        # Quadratic function for concentration parameter
+        # Sets concentration = N when e_ij = 0 or 1
+        S = 1 + 4*(30-1)*(E-0.5)**2
+        S = 2*jnp.ones_like(E)
+        
+        # Calculate logpdf of predicting elicited belief given soft graph
+        #beta_logpdf = lambda g_ij, e_ij, s_ij: beta.logpdf(x=g_ij, a=s_ij*(0.5+e_ij), b=s_ij*(0.5+(1-e_ij)))
+        
+        # joint log prob of all edges in soft graph 
+        #logjoint = vmap(lambda g_i, e_i, s_i: vmap(beta_logpdf, (0,0, 0))(g_i, e_i, s_i), (0, 0, 0))(soft_g, E, S)
+        
+        # Calculate logpdf of predicting elicited belief given soft graph
+        # joint log prob of all edges in soft graph 
+        logjoint = jnp.where(E-0.5 > 0,
+                             beta.logpdf(x=soft_g, a=(1+S*(E-0.5)), b=1),
+                             beta.logpdf(x=soft_g, a=1, b=(1+S*(0.5-E)))
+                            )
+        
+        
+        # Remove influence of uniform beliefs and return log joint 
+        return jnp.sum(
+                    jnp.where(
+                        # [n_observations, n_vars]
+                        E == 0.5,  # mask uniform beliefs
+                        0.0,
+                        # mask hard constraints
+                        logjoint
+                    )
+                )
+        """
+        logjoint = beta.logpdf(x=soft_g, a=E, b=1-E)
+        
+        return jnp.sum(logjoint)

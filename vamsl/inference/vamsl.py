@@ -7,6 +7,7 @@ from jax.scipy.special import logsumexp
 from scipy.optimize import linear_sum_assignment
 from jax.scipy.special import digamma
 from jax.random import categorical
+from sklearn.metrics import confusion_matrix
 
 from vamsl.inference import MixtureJointDiBS
 from vamsl.metrics import ParticleDistribution, neg_ave_log_likelihood 
@@ -15,6 +16,7 @@ from vamsl.utils.func import stable_softmax
 from vamsl.graph_utils import elwise_acyclic_constr_nograd
 from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.utils.func import expand_by, zero_diagonal
+from vamsl.models.graph import DirichletSimilarity
 
 
 class VaMSL(MixtureJointDiBS):
@@ -29,6 +31,7 @@ class VaMSL(MixtureJointDiBS):
                  E = None,
                  n_particles = None,
                  graph_model,
+                 elicitation_graph_model=DirichletSimilarity(),
                  mixture_likelihood_model,
                  component_likelihood_model,
                  interv_mask=None,
@@ -36,7 +39,7 @@ class VaMSL(MixtureJointDiBS):
                  kernel_param=None,
                  optimizer="rmsprop",
                  optimizer_param=None,
-                 alpha_linear=0.05,
+                 alpha_linear=0.05, # referred to as \omega in VaMSL paper
                  beta_linear=1.0,
                  tau=1.0,
                  n_grad_mc_samples=128,
@@ -65,6 +68,7 @@ class VaMSL(MixtureJointDiBS):
         super().__init__(
             x=x,
             graph_model=graph_model,
+            elicitation_graph_model=elicitation_graph_model,
             likelihood_model=mixture_likelihood_model,
             interv_mask=interv_mask,
             kernel=kernel,
@@ -128,13 +132,14 @@ class VaMSL(MixtureJointDiBS):
                                                                          n_dim=self.n_vars,
                                                                          linear=linear)
         
-        self.sf_baselines = jnp.zeros((n_components, self.n_particles)) #not used, but expected as input by DiBS
+        self.sf_baselines = jnp.zeros((n_components, self.n_particles)) # not used, but expected as input by DiBS
         # If given, set elicitation matrix
         if E is None:
-            self.E = jnp.zeros((n_components, self.n_vars, self.n_vars))
+            self.E = 0.5*jnp.ones((n_components, self.n_vars, self.n_vars))
         else:
             self.E = E 
-            
+       
+    
     #
     # q(z, \Theta) CAVI update
     #
@@ -328,6 +333,21 @@ class VaMSL(MixtureJointDiBS):
     # Overriding functions for conditional graph information (prior and elicited)  
     #
     
+    def elicitation_probs_to_hard_constraints(self, E_k):
+        return jnp.where(
+                        # [n_observations, n_vars]
+                        E_k == 1,
+                        1,
+                        # [n_observations, n_vars]
+                        jnp.where(
+                            # [n_observations, n_vars]
+                            E_k == 0,
+                            -1,
+                            # [n_observations, n_vars]
+                            jnp.zeros_like(E_k)
+                        )
+                    )
+    
     def particle_to_g_lim(self, z, E_k):
         """
         Returns :math:`G` corresponding to :math:`\\alpha = \\infty` for particles `z`
@@ -338,6 +358,7 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             graph adjacency matrices of shape ``[..., d, d]``
         """
+        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         u, v = z[..., 0], z[..., 1]
         scores = jnp.einsum('...ik,...jk->...ij', u, v)
         g_samples = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*(scores > 0).astype(jnp.int32)
@@ -367,6 +388,7 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             Gumbel-softmax sample of adjacency matrix [d, d]
         """
+        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         scores = jnp.einsum('...ik,...jk->...ij', z[..., 0], z[..., 1])
 
         # soft reparameterization using gumbel-softmax/concrete distribution
@@ -390,6 +412,7 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             edge probabilities of shape ``[..., d, d]``
         """
+        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         u, v = z[..., 0], z[..., 1]
         scores = jnp.einsum('...ik,...jk->...ij', u, v)
         #probs = sigmoid(self.alpha(t) * scores) # original
@@ -411,6 +434,7 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             tuple of tensors ``[..., d, d], [..., d, d]`` corresponding to ``log(p)`` and ``log(1-p)``
         """ 
+        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         u, v = z[..., 0], z[..., 1]
         scores = jnp.einsum('...ik,...jk->...ij', u, v)
         
@@ -445,7 +469,7 @@ class VaMSL(MixtureJointDiBS):
     
     def identify_ordering(self, *, mixture_data):
         """
-        Identify component indices based on n_componets number of ground truth graphs
+        Identify component indices based on n_components number of ground truth graphs
         
         Args:
             mixture_data (ndarray): ndarray of shape [n_components, n_observations, n_vars] with data for each component.
@@ -460,11 +484,9 @@ class VaMSL(MixtureJointDiBS):
         # [n_components, ParticleDistribution]
         component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(self.log_q_c.shape[1])]
         
-        # expected log lik
-        e_log_lik = lambda dist, x: -neg_ave_log_likelihood(dist=dist,
-                                                            eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
-                                                            x=x)
-        
+        e_log_lik = lambda dist, x: neg_ave_log_likelihood(dist=dist,
+                                                           eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
+                                                           x=x)
         # Calculate log likelihood of all components for data
         cost_matrix = [[e_log_lik(dist, data) for data in mixture_data] for dist in component_dists]
         
@@ -472,4 +494,27 @@ class VaMSL(MixtureJointDiBS):
         assignments = linear_sum_assignment(cost_matrix)
         
         # Return list of optimal allocations as order of components
-        return assignments[1]
+        return assignments
+    
+    
+    def identify_MAP_classification_ordering(self, *, ground_truth_indicator):
+            """
+            Identify component indices based on ordering that maximizes MAP classification accuracy. 
+
+            Args:
+                ground_truth_indicators (ndarray): ndarray of shape [n_observations,] with ground truth component indicators.
+
+            Outputs:
+                order (array): array of with order of components
+            """
+            labels = jnp.arange(self.log_q_c.shape[1])
+            # Get target and predicited assignments
+            y_target = ground_truth_indicator
+            y_pred = [jnp.argmax(log_c_i) for log_c_i in self.log_q_c] 
+
+            # Solve linear assignment problem maximizing correct assignments
+            cm = confusion_matrix(y_pred, y_target, labels=labels)        
+            indexes = linear_sum_assignment(cm, maximize=True)
+
+            # Return list of optimal allocations as order of components
+            return indexes[1]

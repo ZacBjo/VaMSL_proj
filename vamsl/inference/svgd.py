@@ -7,14 +7,15 @@ from jax import jit, vmap, random, grad
 from jax.tree_util import tree_map
 from jax.scipy.special import logsumexp
 from jax.example_libraries import optimizers
-jax.config.update("jax_debug_nans", True)
-from jax import debug
 from jax.scipy.special import logsumexp
 
 from vamsl.inference.dibs import MixtureDiBS
 from vamsl.kernel import AdditiveFrobeniusSEKernel, JointAdditiveFrobeniusSEKernel
 from vamsl.metrics import ParticleDistribution
 from vamsl.utils.func import expand_by
+
+jax.config.update("jax_debug_nans", True)
+from jax import debug
 
 
 class MixtureJointDiBS(MixtureDiBS):
@@ -65,6 +66,7 @@ class MixtureJointDiBS(MixtureDiBS):
     def __init__(self, *,
                  x,
                  graph_model,
+                 elicitation_graph_model,
                  likelihood_model,
                  interv_mask=None,
                  kernel=JointAdditiveFrobeniusSEKernel,
@@ -96,6 +98,7 @@ class MixtureJointDiBS(MixtureDiBS):
             x=x,
             interv_mask=interv_mask,
             log_graph_prior=graph_model.unnormalized_log_prob_soft,
+            log_graph_elicitation_prior=elicitation_graph_model.joint_log_prob_soft,
             log_joint_prob=likelihood_model.interventional_log_joint_prob,
             alpha_linear=alpha_linear,
             beta_linear=beta_linear,
@@ -372,7 +375,7 @@ class MixtureJointDiBS(MixtureDiBS):
         
         # d/dz log p(z) (acyclicity)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k)
+        dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k, c)
 
         # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood

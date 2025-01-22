@@ -55,6 +55,7 @@ class MixtureDiBS:
                  x,
                  interv_mask,
                  log_graph_prior,
+                 log_graph_elicitation_prior,
                  log_joint_prob,
                  alpha_linear=0.05,
                  beta_linear=1.0,
@@ -69,6 +70,7 @@ class MixtureDiBS:
         self.interv_mask = interv_mask
         self.n_vars = x.shape[-1]
         self.log_graph_prior = log_graph_prior
+        self.log_graph_elicitation_prior = log_graph_elicitation_prior
         self.log_joint_prob = log_joint_prob
         self.alpha = lambda t: (alpha_linear * t)
         self.beta = lambda t: (beta_linear * t)
@@ -529,7 +531,7 @@ class MixtureDiBS:
         return mc_gradient_samples.mean(0)
 
 
-    def log_graph_prior_particle(self, single_z, t, E_k):
+    def log_graph_prior_particle(self, single_z, t, E_k, c):
         """
         Computes :math:`\\log p(G)` component of :math:`\\log p(Z)`,
         i.e. not the contraint or Gaussian prior term, but the DAG belief.
@@ -548,10 +550,17 @@ class MixtureDiBS:
         single_soft_g = self.edge_probs(single_z, t, E_k)
 
         # [1, ]
-        return self.log_graph_prior(soft_g=single_soft_g)
+        graph_prior = self.log_graph_prior(soft_g=single_soft_g)
+        
+        # [1, ]
+        graph_elicitation_prior = self.log_graph_elicitation_prior(soft_g=single_soft_g, 
+                                                                   E=E_k,
+                                                                   N=jnp.count_nonzero(c))
+        
+        return  graph_prior + graph_elicitation_prior
 
 
-    def eltwise_grad_latent_prior(self, zs, subkeys, t, E_k):
+    def eltwise_grad_latent_prior(self, zs, subkeys, t, E_k, c):
         """
         Computes batch of estimators for the score :math:`\\nabla_Z \\log p(Z)`
         with
@@ -574,7 +583,7 @@ class MixtureDiBS:
         grad_log_graph_prior_particle = grad(self.log_graph_prior_particle, 0)
 
         # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
-        grad_prior_z = vmap(grad_log_graph_prior_particle, (0, None, None), 0)(zs, t, E_k)
+        grad_prior_z = vmap(grad_log_graph_prior_particle, (0, None, None, None), 0)(zs, t, E_k, c)
 
         # constraint term
         # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
