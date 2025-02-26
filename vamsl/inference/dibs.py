@@ -10,6 +10,7 @@ jax.config.update("jax_debug_nans", True)
 
 from vamsl.graph_utils import acyclic_constr_nograd
 from vamsl.utils.func import expand_by, zero_diagonal
+from vamsl.models.graph import ElicitationBernoulli
 
 
 class MixtureDiBS:
@@ -209,7 +210,6 @@ class MixtureDiBS:
         # mask diagonal since it is explicitly not modeled
         # NOTE: this is not technically log(p), but the way `edge_log_probs_` is used, this is correct
         return zero_diagonal(log_probs), zero_diagonal(log_probs_neg)
-
 
 
     def latent_log_prob(self, single_g, single_z, t):
@@ -529,6 +529,59 @@ class MixtureDiBS:
 
         # [d, k, 2]
         return mc_gradient_samples.mean(0)
+    
+    
+#### TESTING ELICITATION START
+    
+    def elicitation_gumbel(self, single_z, single_eps, t, E_k):
+        """
+        Evaluates continuous acyclicity constraint using
+        Gumbel-softmax instead of Bernoulli samples
+
+        Args:
+            single_z (ndarray): single latent tensor ``[d, k, 2]``
+            single_eps (ndarray): i.i.d. Logistic noise of shape ``[d, d``] for Gumbel-softmax
+            t (int): step
+
+        Returns:
+            constraint value of shape ``[1,]``
+        """
+        n_vars = single_z.shape[0]
+        G = self.particle_to_soft_graph(single_z, single_eps, t, E_k)
+        G = (G > 0.5).astype(jnp.int32)
+        f = ElicitationBernoulli().joint_log_prob(G=G, E=E_k)
+        
+        return f * self.eltwise_grad_latent_log_prob(jnp.array([G]), single_z, E_k, t)[0]
+
+
+    def grad_elicitation_gumbel(self, single_z, key, t, E_k):
+        """
+        Reparameterization estimator for the gradient :math:`\\nabla_Z E_{p(G|Z)} [ h(G) ]`
+        where :math:`h` is the acyclicity constraint penalty function.
+
+        Since :math:`h` is differentiable w.r.t. :math:`G`, always uses
+        the Gumbel-softmax / concrete distribution reparameterization trick.
+
+        Args:
+            single_z (ndarray): single latent tensor ``[d, k, 2]``
+            key (ndarray): rng
+            t (int): step
+
+        Returns:
+            gradient of shape ``[d, k, 2]``
+        """
+        n_vars = single_z.shape[0]
+
+        # [n_mc_samples, d, d]
+        eps = random.logistic(key, shape=(self.n_acyclicity_mc_samples, n_vars, n_vars))
+
+        # [n_mc_samples, d, k, 2]
+        mc_gradient_samples = vmap(self.elicitation_gumbel, (None, 0, None, None), 0)(single_z, eps, t, E_k)
+
+        # [d, k, 2]
+        return mc_gradient_samples.sum(0)
+
+#### TESTING ELICITATION END
 
 
     def log_graph_prior_particle(self, single_z, t, E_k, c):
@@ -552,12 +605,16 @@ class MixtureDiBS:
         # [1, ]
         graph_prior = self.log_graph_prior(soft_g=single_soft_g)
         
+        """
+        # for elicited preference based prior construction
         # [1, ]
         graph_elicitation_prior = self.log_graph_elicitation_prior(soft_g=single_soft_g, 
                                                                    E=E_k,
                                                                    N=jnp.count_nonzero(c))
-        
-        return  graph_prior + graph_elicitation_prior
+        """
+
+        return graph_prior 
+        #return graph_elicitation_prior
 
 
     def eltwise_grad_latent_prior(self, zs, subkeys, t, E_k, c):
@@ -588,10 +645,18 @@ class MixtureDiBS:
         # constraint term
         # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
         eltwise_grad_constraint = vmap(self.grad_constraint_gumbel, (0, 0, None, None), 0)(zs, subkeys, t, E_k)
+        
+        # elicitation prior term
+        key, *batch_subk = random.split(subkeys[0], zs.shape[0] + 1)
+        # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
+        eltwise_grad_elicitation = vmap(self.grad_elicitation_gumbel, (0, 0, None, None), 0)(zs, jnp.array(batch_subk), t, E_k)
 
         return - self.beta(t) * eltwise_grad_constraint \
                - zs / (self.latent_prior_std ** 2.0) \
                + grad_prior_z
+               #+ eltwise_grad_elicitation
+               # \
+               
 
     
     #
