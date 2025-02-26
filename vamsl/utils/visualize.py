@@ -22,6 +22,13 @@ def visualize_ground_truths(mats, size=4.0, columns=7):
     """    
     `mats`: (n_ground_truths, d, d) 
     """
+    if not isinstance(mats, list):
+        visualize_ground_truth(mats)
+        return
+    elif len(mats) == 1:
+        visualize_ground_truth(mats[0])
+        return
+    
     cols = min(len(mats), columns)
     rows = 1 + ((len(mats)-1)//cols)
     plt.rcParams['figure.figsize'] = [cols*size, rows*size]
