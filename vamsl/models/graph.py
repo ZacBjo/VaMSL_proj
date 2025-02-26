@@ -331,12 +331,12 @@ class DirichletSimilarity:
                                      soft_g
                                     )
                           )
-        """
+        
         
         # Quadratic function for concentration parameter
         # Sets concentration = N when e_ij = 0 or 1
         S = 1 + 4*(30-1)*(E-0.5)**2
-        S = 2*jnp.ones_like(E)
+        S = 10*jnp.ones_like(E)
         
         # Calculate logpdf of predicting elicited belief given soft graph
         #beta_logpdf = lambda g_ij, e_ij, s_ij: beta.logpdf(x=g_ij, a=s_ij*(0.5+e_ij), b=s_ij*(0.5+(1-e_ij)))
@@ -362,7 +362,64 @@ class DirichletSimilarity:
                         logjoint
                     )
                 )
-        """
+        
         logjoint = beta.logpdf(x=soft_g, a=E, b=1-E)
         
         return jnp.sum(logjoint)
+    
+    
+class ElicitationBernoulli:
+    """
+    Elicted prior term based on elictied edge probabilities.  
+
+    :math:`p(Y \\mid G) \\propto p(G \\mid Y)p(Y)`
+
+    where :math:`p(G \\mid Y)` denotes elicitation likelihood
+    and :math:`p(Y)` denotes prior over expert edge beliefs.
+
+    Args:
+        n_vars (int): number of variables in DAG
+        n_edges_per_node (int): number of edges sampled per variable
+
+    """
+
+    def __init__(self):
+        pass
+
+    def joint_log_prob(self, *, G, E):
+        """
+        Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
+
+        Args:
+            G (ndarray): graph adjacency matrix
+            E (ndarray): elcitied edge probabilities of shape
+            N (int): number of observations, scales the impact of expert beliefs on prior probs
+
+        Returns:
+            log joint probability corresponding to edge probabilities in :math:`G | E_soft`
+
+        """
+        # Mask hard constraints as uniform to remove their influence (hard constraints are applied via p(G|Z,E))
+        E = jnp.where(E == 1.0,
+                      0.5,
+                      jnp.where(E == 0.0, 
+                                0.5,
+                                # [n_observations, n_vars]
+                                E
+                               )
+                     )
+        
+        # get bernoulli probs for edges and complement for absent edges 
+        logprobs = jnp.where(G == 1.0,
+                             jnp.log(E),
+                             jnp.where(G == 0.0,
+                                       jnp.log(1-E),
+                                       # [n_observations, n_vars]
+                                       jnp.zeros_like(E)
+                                      )
+                            )
+        
+        # Remove probs from (un)elicited values, default at 0.5
+        elicited_logprobs = jnp.where(E == 0.5, 0, logprobs)
+        
+        return jnp.sum(elicited_logprobs)
