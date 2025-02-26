@@ -44,6 +44,7 @@ class VaMSL(MixtureJointDiBS):
                  tau=1.0,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
+                 n_mixture_grad_mc_samples=30,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
                  latent_prior_std=None,
@@ -80,6 +81,7 @@ class VaMSL(MixtureJointDiBS):
             tau=tau,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
+            n_mixture_grad_mc_samples=n_mixture_grad_mc_samples,
             grad_estimator_z=grad_estimator_z,
             score_function_baseline=score_function_baseline,
             latent_prior_std=latent_prior_std,
@@ -152,13 +154,21 @@ class VaMSL(MixtureJointDiBS):
             key (ndarray): prng key
 
         Returns:
-           one_hot_assignments (ndarray): One hot assignemnt vectors of shape ``[n_observations, n_components]``
+            one_hot_assignments (ndarray): One hot assignment vectors of shape ``[n_observations, n_components]``
 
         """
+        n_mixture_grad_mc_samples = self.n_mixture_grad_mc_samples
         # Sample assignments from categorical distribution parametrized by responsibilities
-        assignments = categorical(key=key, logits=self.log_q_c)
+        # [n_mc_grad_samples, n_observations]
+        assignments = random.categorical(key=key, logits=self.log_q_c, shape=(n_mixture_grad_mc_samples, self.log_q_c.shape[0]))
+
         # Construct matrix of one-hot vectors from sampled assignmnets
+        # [n_mixture_grad_mc_samples, n_observations, n_components]
         one_hot_assignments = jax.nn.one_hot(assignments, num_classes=self.log_q_c.shape[1])
+        
+        # Switch leading dimensions
+        # [n_components, n_mixture_grad_mc_samples, n_observations]
+        one_hot_assignments = jnp.array([one_hot_assignments[...,col] for col in range(self.log_q_c.shape[1])])
         
         return one_hot_assignments
 
@@ -283,6 +293,23 @@ class VaMSL(MixtureJointDiBS):
     #
     # Getters and setters
     #
+    
+    def set_posteriors(self, *, q_z, q_theta, log_q_c, q_pi):
+        """
+        Sets all variational posteriors to inputs.
+
+        Args:
+            q_z (ndarray): Embedded graph particles of shape ``[n_components, n_particles, n_vars, l_dim, 2]``
+            q_theta (Any): PyTree with leading dim ``n_particles``
+            log_q_c (ndarray): Component log responsibilities of shape ``[n_observations, n_components]`` 
+            q_pi (ndarray): Mixing weights of shape ``[n_components,]``
+
+        Returns:
+            None 
+
+        """
+        self.q_z, self.q_theta, self.log_q_c, self.q_pi = q_z, q_theta, log_q_c, q_pi
+    
     
     def get_posteriors(self):
         """
@@ -445,6 +472,48 @@ class VaMSL(MixtureJointDiBS):
         # mask diagonal since it is explicitly not modeled
         # NOTE: this is not technically log(p), but the way `edge_log_probs_` is used, this is correct
         return zero_diagonal(log_probs), zero_diagonal(log_probs_neg)
+    
+    
+    def latent_log_prob(self, single_g, single_z, E_k, t):
+        """
+        Log likelihood of generative graph model
+
+        Args:
+            single_g (ndarray): single graph adjacency matrix ``[d, d]``
+            single_z (ndarray): single latent tensor ``[d, k, 2]``
+            t (int): step
+
+        Returns:
+            log likelihood :math:`log p(G | Z)` of shape ``[1,]``
+        """
+        # [d, d], [d, d]
+        log_p, log_1_p = self.edge_log_probs(single_z, t, E_k)
+
+        # [d, d]
+        log_prob_g_ij = single_g * log_p + (1 - single_g) * log_1_p
+
+        # [1,] # diagonal is masked inside `edge_log_probs`
+        log_prob_g = jnp.sum(log_prob_g_ij)
+
+        return log_prob_g
+    
+
+    def eltwise_grad_latent_log_prob(self, gs, single_z, E_k, t):
+        """
+        Gradient of log likelihood of generative graph model w.r.t. :math:`Z`
+        i.e. :math:`\\nabla_Z \\log p(G | Z)`
+        Batched over samples of :math:`G` given a single :math:`Z`.
+
+        Args:
+            gs (ndarray): batch of graph matrices ``[n_graphs, d, d]``
+            single_z (ndarray): latent variable ``[d, k, 2]``
+            t (int): step
+
+        Returns:
+            batch of gradients of shape ``[n_graphs, d, k, 2]``
+        """
+        dz_latent_log_prob = grad(self.latent_log_prob, 1)
+        return vmap(dz_latent_log_prob, (0, None, None, None), 0)(gs, single_z, E_k, t)
 
     
     #

@@ -78,6 +78,7 @@ class MixtureJointDiBS(MixtureDiBS):
                  tau=1.0,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
+                 n_mixture_grad_mc_samples=30,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
                  latent_prior_std=None,
@@ -113,7 +114,8 @@ class MixtureJointDiBS(MixtureDiBS):
 
         self.likelihood_model = likelihood_model
         self.graph_model = graph_model
-
+        self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
+        
         # functions for post-hoc likelihood evaluations
         self.eltwise_log_likelihood_observ = vmap(lambda g, theta, x_ho:
             likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
@@ -366,12 +368,13 @@ class MixtureJointDiBS(MixtureDiBS):
 
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        
+        #dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
+        dtheta_log_prob = (1/self.n_mixture_grad_mc_samples) * vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k).sum(axis=0)
         
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
+        #dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
+        dz_log_likelihood = (1/self.n_mixture_grad_mc_samples) * vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)[0].sum(axis=0)
         
         # d/dz log p(z) (acyclicity)
         key, *batch_subk = random.split(key, n_particles + 1)
@@ -449,7 +452,7 @@ class MixtureJointDiBS(MixtureDiBS):
     # Update SVGD approximations across components
     def _compwise_sample_component(self, t, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, linear=True):
         if linear:
-            return vmap(self._sample_component, (None, None, 0, 1, 0, 0, 0, 0))(t, steps, subkeys, cs, q_z, 
+            return vmap(self._sample_component, (None, None, 0, 0, 0, 0, 0, 0))(t, steps, subkeys, cs, q_z, 
                                                                                 q_theta, sf_baselines, E)
         else:
             # non-linear parameters don't support vectorized mapping, replace with inbuilt map
@@ -483,8 +486,8 @@ class MixtureJointDiBS(MixtureDiBS):
             batch of samples :math:`G, \\Theta \\sim p(G, \\Theta | D)`
 
         """
-        # number of columns in responsibility matrix determines number of components
-        n_components = cs.shape[1]        
+        # leading dim in responsibility matrix determines number of components
+        n_components = cs.shape[0]
         q_z = init_q_z
         q_theta = init_q_theta
         sf_baselines = init_sf_baselines
