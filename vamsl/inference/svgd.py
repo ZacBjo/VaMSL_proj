@@ -1,5 +1,5 @@
 import functools
-import numpy as onp
+import numpy as np
 
 import jax
 import jax.numpy as jnp
@@ -78,7 +78,8 @@ class MixtureJointDiBS(MixtureDiBS):
                  tau=1.0,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
-                 n_mixture_grad_mc_samples=30,
+                 n_mixture_grad_mc_samples=32,
+                 n_elicitation_grad_mc_samples=1,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
                  latent_prior_std=None,
@@ -106,6 +107,7 @@ class MixtureJointDiBS(MixtureDiBS):
             tau=tau,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
+            n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples,
             grad_estimator_z=grad_estimator_z,
             score_function_baseline=score_function_baseline,
             latent_prior_std=latent_prior_std,
@@ -369,12 +371,14 @@ class MixtureJointDiBS(MixtureDiBS):
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
         #dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        dtheta_log_prob = (1/self.n_mixture_grad_mc_samples) * vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k).sum(axis=0)
+        dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
+        dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
         
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
         #dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
-        dz_log_likelihood = (1/self.n_mixture_grad_mc_samples) * vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)[0].sum(axis=0)
+        dz_log_likelihood_mc_samples, sf_baseline_mc_samples = vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
+        dz_log_likelihood, sf_baseline = dz_log_likelihood_mc_samples.mean(axis=0), sf_baseline_mc_samples.mean(axis=0)
         
         # d/dz log p(z) (acyclicity)
         key, *batch_subk = random.split(key, n_particles + 1)
@@ -382,6 +386,9 @@ class MixtureJointDiBS(MixtureDiBS):
 
         # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood
+        #debug.print('{x}\n\n',x= jnp.absolute(dz_log_prob).mean())
+        #debug.print('{x}',x=jnp.absolute(dz_log_prior).mean()/jnp.absolute(dz_log_prob).mean())
+        #debug.print('+++++++++++++++++++++++++++++++++++++++')
         
         # k((z, theta), (z, theta)) for all particles
         kxx = self._f_kernel_mat(z, theta, z, theta)
