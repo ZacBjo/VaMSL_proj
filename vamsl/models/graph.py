@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jax import random
 from jax import vmap
 from jax.scipy.stats import dirichlet, beta
+from jax.scipy.special import betaln
 
 from vamsl.graph_utils import mat_to_graph, graph_to_mat, mat_is_dag
 from vamsl.utils.func import zero_diagonal
@@ -386,7 +387,7 @@ class ElicitationBernoulli:
     def __init__(self):
         pass
 
-    def joint_log_prob(self, *, G, E):
+    def joint_log_prob(self, *, G, E, alpha_e=1, beta_e=1):
         """
         Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
 
@@ -399,6 +400,7 @@ class ElicitationBernoulli:
             log joint probability corresponding to edge probabilities in :math:`G | E_soft`
 
         """
+        alphas, betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
         # Mask hard constraints as uniform to remove their influence (hard constraints are applied via p(G|Z,E))
         E = jnp.where(E == 1.0,
                       0.5,
@@ -410,16 +412,20 @@ class ElicitationBernoulli:
                      )
         
         # get bernoulli probs for edges and complement for absent edges 
-        logprobs = jnp.where(G == 1.0,
-                             jnp.log(E),
-                             jnp.where(G == 0.0,
-                                       jnp.log(1-E),
-                                       # [n_observations, n_vars]
-                                       jnp.zeros_like(E)
-                                      )
-                            )
+        elicited_logliks = jnp.where(G == 1,
+                                     jnp.log(E),
+                                     jnp.where(G == 0,
+                                               jnp.log(1-E),
+                                               # [n_observations, n_vars]
+                                               jnp.zeros_like(E)
+                                              )
+                                    )
+        
+        elicited_logpriors = beta.logpdf(E, a=alphas, b=betas)
+        elicited_lognumerator = elicited_logliks+elicited_logpriors
+        logdenominator = betaln(alphas + G, betas + (1-G)) - betaln(alphas, betas)
         
         # Remove probs from (un)elicited values, default at 0.5
-        elicited_logprobs = jnp.where(E == 0.5, 0, logprobs)
+        elicited_logpost = jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator)) - jnp.sum(jnp.where(E == 0.5, 0, logdenominator))
         
-        return jnp.sum(elicited_logprobs)
+        return elicited_logpost
