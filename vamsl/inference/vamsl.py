@@ -18,6 +18,8 @@ from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.utils.func import expand_by, zero_diagonal
 from vamsl.models.graph import DirichletSimilarity
 
+from jax import debug
+
 
 class VaMSL(MixtureJointDiBS):
     def __init__(self, *,
@@ -44,7 +46,8 @@ class VaMSL(MixtureJointDiBS):
                  tau=1.0,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
-                 n_mixture_grad_mc_samples=30,
+                 n_mixture_grad_mc_samples=32,
+                 n_elicitation_grad_mc_samples=1,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
                  latent_prior_std=None,
@@ -82,6 +85,7 @@ class VaMSL(MixtureJointDiBS):
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_mixture_grad_mc_samples=n_mixture_grad_mc_samples,
+            n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples,
             grad_estimator_z=grad_estimator_z,
             score_function_baseline=score_function_baseline,
             latent_prior_std=latent_prior_std,
@@ -360,20 +364,13 @@ class VaMSL(MixtureJointDiBS):
     # Overriding functions for conditional graph information (prior and elicited)  
     #
     
-    def elicitation_probs_to_hard_constraints(self, E_k):
-        return jnp.where(
-                        # [n_observations, n_vars]
-                        E_k == 1,
-                        1,
-                        # [n_observations, n_vars]
-                        jnp.where(
-                            # [n_observations, n_vars]
-                            E_k == 0,
-                            -1,
-                            # [n_observations, n_vars]
-                            jnp.zeros_like(E_k)
-                        )
-                    )
+    def hard_constraint_mask(self, probs, E_k):
+        return jnp.where(E_k==1, 1, jnp.where(E_k==0, 0, probs))
+    
+    
+    def hard_constraint_mask_zeros(self, probs, E_k):
+        return jnp.where(E_k==1, 0, jnp.where(E_k==0, 0, probs))
+    
     
     def particle_to_g_lim(self, z, E_k):
         """
@@ -385,10 +382,9 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             graph adjacency matrices of shape ``[..., d, d]``
         """
-        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         u, v = z[..., 0], z[..., 1]
         scores = jnp.einsum('...ik,...jk->...ij', u, v)
-        g_samples = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*(scores > 0).astype(jnp.int32)
+        g_samples = self.hard_constraint_mask((scores > 0).astype(jnp.int32), E_k)
 
         # mask diagonal since it is explicitly not modeled
         return zero_diagonal(g_samples)
@@ -415,13 +411,10 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             Gumbel-softmax sample of adjacency matrix [d, d]
         """
-        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         scores = jnp.einsum('...ik,...jk->...ij', z[..., 0], z[..., 1])
-
         # soft reparameterization using gumbel-softmax/concrete distribution
         # eps ~ Logistic(0,1)
-        #soft_graph = sigmoid(self.tau * (eps + self.alpha(t) * scores)) #original
-        soft_graph = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.tau * (eps + self.alpha(t) * scores)) # TEST
+        soft_graph = self.hard_constraint_mask(sigmoid(self.tau * (eps + self.alpha(t) * scores)), E_k)
 
         # mask diagonal since it is explicitly not modeled
         return zero_diagonal(soft_graph)
@@ -439,12 +432,10 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             edge probabilities of shape ``[..., d, d]``
         """
-        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         u, v = z[..., 0], z[..., 1]
         scores = jnp.einsum('...ik,...jk->...ij', u, v)
-        #probs = sigmoid(self.alpha(t) * scores) # original
-        probs = (E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.alpha(t) * scores) # TEST
-
+        probs = self.hard_constraint_mask(sigmoid(self.alpha(t) * scores), E_k)
+        
         # mask diagonal since it is explicitly not modeled
         return zero_diagonal(probs)
 
@@ -461,13 +452,10 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             tuple of tensors ``[..., d, d], [..., d, d]`` corresponding to ``log(p)`` and ``log(1-p)``
         """ 
-        E_k = self.elicitation_probs_to_hard_constraints(E_k)
         u, v = z[..., 0], z[..., 1]
         scores = jnp.einsum('...ik,...jk->...ij', u, v)
         
-        #log_probs, log_probs_neg = log_sigmoid(self.alpha(t) * scores), log_sigmoid(self.alpha(t) * -scores) #original
-        log_probs = jnp.log((E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.alpha(t) * scores))
-        log_probs_neg = jnp.log((E_k**2)*((1+E_k)/2) + (1-E_k**2)*sigmoid(self.alpha(t) * -scores))
+        log_probs, log_probs_neg = log_sigmoid(self.alpha(t) * scores), log_sigmoid(self.alpha(t) * -scores)
         
         # mask diagonal since it is explicitly not modeled
         # NOTE: this is not technically log(p), but the way `edge_log_probs_` is used, this is correct
@@ -491,9 +479,12 @@ class VaMSL(MixtureJointDiBS):
 
         # [d, d]
         log_prob_g_ij = single_g * log_p + (1 - single_g) * log_1_p
-
+        
+        # [d, d] # mask hard constraints to zero, so they don't affect gradients
+        masked_log_prob_g_ij = self.hard_constraint_mask_zeros(log_prob_g_ij, E_k)
+        
         # [1,] # diagonal is masked inside `edge_log_probs`
-        log_prob_g = jnp.sum(log_prob_g_ij)
+        log_prob_g = jnp.sum(masked_log_prob_g_ij)
 
         return log_prob_g
     
