@@ -216,7 +216,7 @@ def make_linear_gaussian_equivalent_model(*, key, n_vars=20, graph_prior_str='sf
 
 def make_linear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf', 
     obs_noise=0.1, mean_edge=0.0, sig_edge=1.0, min_edge=0.5, n_observations=100,
-    n_ho_observations=100):
+    n_ho_observations=100, edges_per_node=2):
     """
     Samples a synthetic linear Gaussian BN instance 
 
@@ -237,7 +237,7 @@ def make_linear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
     """
 
     # init models
-    graph_model = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str)
+    graph_model = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str, edges_per_node=edges_per_node)
 
     generative_model = LinearGaussian(
         n_vars=n_vars,
@@ -271,7 +271,7 @@ def make_linear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
 
 def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf', 
     obs_noise=0.1, sig_param=1.0, hidden_layers=(5,), n_observations=100,
-    n_ho_observations=100):
+    n_ho_observations=100, edges_per_node=2):
     """
     Samples a synthetic nonlinear Gaussian BN instance 
     where the local conditional distributions are parameterized
@@ -295,7 +295,7 @@ def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
     """
 
     # init models
-    graph_model = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str)
+    graph_model = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str, edges_per_node=edges_per_node)
 
     generative_model = DenseNonlinearGaussian(
         n_vars=n_vars,
@@ -323,7 +323,8 @@ def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
     return data, graph_model, likelihood_model
 
 
-def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, struct_eq_type):
+def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, struct_eq_type, edges_per_node=2,
+                       obs_noise=0.1, mean_edge=0.0, sig_edge=1.0, min_edge=0.5, sig_param=1.0, hidden_layers=(5,)):
     """
     Generate data for one experiment run. Data is generated from n_components number of randomly generated graphs. 
     The data is stacked and then shuffled.
@@ -342,10 +343,12 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
     # Generate either linear or non-linear data
     if struct_eq_type == "linear":
         make_data_model = make_linear_gaussian_model
-        likelihood_model =  MixtureLinearGaussian(n_vars=n_vars)
+        likelihood_model =  MixtureLinearGaussian(n_vars=n_vars, obs_noise=obs_noise, mean_edge=mean_edge,
+                                                  sig_edge=sig_edge, min_edge=min_edge)
     elif struct_eq_type == 'nonlinear':
         make_data_model = make_nonlinear_gaussian_model
-        likelihood_model =  MixtureDenseNonlinearGaussian(n_vars=n_vars)
+        likelihood_model =  MixtureDenseNonlinearGaussian(n_vars=n_vars, obs_noise=obs_noise, 
+                                                          sig_param=sig_param, hidden_layers=hidden_layers)
     else:
         raise ValueError(f'Supplied unknown data_model: {data_model}. Should be either linear or non-linear.')
     
@@ -358,9 +361,19 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
     # loop over components
     key, *subks = random.split(key, len(mixing_rate)+1) # Generate subkeys for each component
     for subk, n_comp_obs in zip(jnp.array(subks), comp_observations):
-        data, graph_model, component_lik_model = make_data_model(key=subk, n_vars=n_vars, 
-                                                                 graph_prior_str=graph_type,
-                                                                 n_observations=int(n_comp_obs.item()))    
+        if struct_eq_type == "linear":
+            data, graph_model, component_lik_model = make_data_model(key=subk, n_vars=n_vars, 
+                                                                     graph_prior_str=graph_type,
+                                                                     edges_per_node=edges_per_node,
+                                                                     n_observations=int(n_comp_obs.item()),
+                                                                     obs_noise=obs_noise, mean_edge=mean_edge, 
+                                                                     sig_edge=sig_edge, min_edge=min_edge)
+        elif struct_eq_type == 'nonlinear':
+            data, graph_model, component_lik_model = make_data_model(key=subk, n_vars=n_vars, 
+                                                                     graph_prior_str=graph_type,
+                                                                     edges_per_node=edges_per_node,
+                                                                     n_observations=int(n_comp_obs.item()),
+                                                                     obs_noise=obs_noise, sig_param=sig_param, hidden_layers=hidden_layers)
         xs.append(data.x)
         graphs.append(data.g)
         thetas.append(data.theta)
