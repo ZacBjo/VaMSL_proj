@@ -61,6 +61,7 @@ class MixtureDiBS:
                  alpha_linear=0.05,
                  beta_linear=0.25,
                  tau=1.0,
+                 lamda=0,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_elicitation_grad_mc_samples=1,
@@ -77,6 +78,7 @@ class MixtureDiBS:
         self.alpha = lambda t: (alpha_linear * t)
         self.beta = lambda t: (beta_linear * t)
         self.tau = tau
+        self.lamda=lamda
         self.n_grad_mc_samples = n_grad_mc_samples
         self.n_acyclicity_mc_samples = n_acyclicity_mc_samples
         self.n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples
@@ -656,7 +658,7 @@ class MixtureDiBS:
         #debug.print('b * h(x): {x}',x= jnp.absolute(self.beta(t) * eltwise_grad_constraint).mean())
         #debug.print('numerics: {x}',x=jnp.absolute(zs / (self.latent_prior_std ** 2.0)).mean())
         #debug.print('rand. G:  {x}',x=jnp.absolute(grad_prior_z).mean())
-        #debug.print('elicit.:  {x}',x=jnp.absolute(eltwise_grad_elicitation).mean())
+        #debug.print('elicit.:  {x}',x=eltwise_grad_elicitation)
         #debug.print('-------------------------------------------')
         
         #return eltwise_grad_elicitation
@@ -667,7 +669,7 @@ class MixtureDiBS:
         #return - self.beta(t) * eltwise_grad_constraint + (self.n_vars**2) * eltwise_grad_elicitation \
         
         return - self.beta(t) * eltwise_grad_constraint \
-               + (self.n_vars**3) * eltwise_grad_elicitation \
+               + self.lamda * eltwise_grad_elicitation \
                - zs / (self.latent_prior_std ** 2.0) \
                + grad_prior_z 
                

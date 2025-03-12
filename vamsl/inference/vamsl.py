@@ -44,6 +44,7 @@ class VaMSL(MixtureJointDiBS):
                  alpha_linear=0.05, # referred to as \omega in VaMSL paper
                  beta_linear=1.0,
                  tau=1.0,
+                 lamda=0.0,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
@@ -82,6 +83,7 @@ class VaMSL(MixtureJointDiBS):
             alpha_linear=alpha_linear,
             beta_linear=beta_linear,
             tau=tau,
+            lamda=lamda,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_mixture_grad_mc_samples=n_mixture_grad_mc_samples,

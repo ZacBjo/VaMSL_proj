@@ -76,6 +76,7 @@ class MixtureJointDiBS(MixtureDiBS):
                  alpha_linear=0.05,
                  beta_linear=1.0,
                  tau=1.0,
+                 lamda=0.0,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
@@ -105,6 +106,7 @@ class MixtureJointDiBS(MixtureDiBS):
             alpha_linear=alpha_linear,
             beta_linear=beta_linear,
             tau=tau,
+            lamda=lamda,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples,
@@ -372,8 +374,12 @@ class MixtureJointDiBS(MixtureDiBS):
         key, *batch_subk = random.split(key, n_particles + 1)
         #dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
         dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
-        
+        if isinstance(dtheta_log_prob_mc_samples, list):
+            assert False, 'Need to implement MC averaging for gradients of non-linear function parameters.'
+            # TODO
+        else:
+            dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
+            
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
         #dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
@@ -386,9 +392,6 @@ class MixtureJointDiBS(MixtureDiBS):
 
         # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood
-        #debug.print('{x}\n\n',x= jnp.absolute(dz_log_prob).mean())
-        #debug.print('{x}',x=jnp.absolute(dz_log_prior).mean()/jnp.absolute(dz_log_prob).mean())
-        #debug.print('+++++++++++++++++++++++++++++++++++++++')
         
         # k((z, theta), (z, theta)) for all particles
         kxx = self._f_kernel_mat(z, theta, z, theta)
@@ -464,7 +467,7 @@ class MixtureJointDiBS(MixtureDiBS):
         else:
             # non-linear parameters don't support vectorized mapping, replace with inbuilt map
             ts, steps = q_z.shape[0]*[t], q_z.shape[0]*[steps]
-            q_z_theta_baselines = [q for q in map(self._sample_component, ts, steps, subkeys, jnp.transpose(cs), q_z, q_theta, sf_baselines, E)]
+            q_z_theta_baselines = [q for q in map(self._sample_component, ts, steps, subkeys, cs, q_z, q_theta, sf_baselines, E)]
             # Unpack results
             q_z = jnp.stack([q_z_theta_baselines[k][0] for k in range(q_z.shape[0])], axis=0)
             q_theta = [q_z_theta_baselines[k][1] for k in range(q_z.shape[0])]
