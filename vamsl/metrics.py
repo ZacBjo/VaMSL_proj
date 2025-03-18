@@ -1,5 +1,8 @@
 import jax.numpy as jnp
+import jax.random as random
+from jax import vmap
 from jax.scipy.special import logsumexp
+from igraph import compare_communities
 
 from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.graph_utils import elwise_acyclic_constr_nograd
@@ -19,7 +22,6 @@ class ParticleDistribution(NamedTuple):
         theta (ndarray): batch of parameter PyTrees with leading dimension ``M``
 
     """
-
     logp: Any
     g: Any
     theta: Any = None
@@ -268,3 +270,106 @@ def neg_ave_log_likelihood(*, dist, eltwise_log_likelihood, x):
     return score
 
 
+def neg_log_posterior_predictive_density(*, key, q_pi, dists, eltwise_log_likelihood, x, n_mixing_mc_samples=100):
+    """
+    Returns approximated posterior predictive density: -log p(x* | D).
+    """
+    log_liks, log_liks_sgn = jnp.zeros_like(q_pi), jnp.zeros_like(q_pi)
+    
+    # calculate mc approximatrion of log p(x* | D, c=k) for each k
+    for k, dist in zip(range(len(dists)), dists):
+        assert dist.theta is not None
+        n_observations, n_vars = x.shape
+        # select acyclic graphs
+        is_dag = elwise_acyclic_constr_nograd(dist.g, n_vars) == 0
+        if is_dag.sum() == 0:
+            # score as empty graph only
+            g = tree_mul(dist.g, 0.0)
+            theta = tree_mul(dist.theta, 0.0)
+            log_weights = tree_mul(dist.logp, 0.0)
+
+        else:
+            g = dist.g[is_dag, :, :]
+            theta = tree_select(dist.theta, is_dag)
+            log_weights = dist.logp[is_dag] - logsumexp(dist.logp[is_dag])
+        
+        # [len(g), 1] 
+        # log p(x* | G_k, theta_k, c=k)
+        log_likelihoods = eltwise_log_likelihood(g, theta, x)
+        # [len(g), 1] 
+        # log p(x*, G_k, theta_k | D, c=k) = log p(x* | G_k, theta_k, c=k) + log p(G_k, theta_k | D)
+        log_joint = log_likelihoods + log_weights
+        
+        # [1,], [1,]
+        # log p(x* | D, c=k) = Log Sum_G 1/|G| * Exp(log p(x*, G_k, theta_k | D, c=k))
+        log_score, log_score_sgn = logsumexp(log_joint, b=(1/g.shape[0]) * jnp.ones_like(log_joint), 
+                                             axis=0, return_sign=True)
+        
+        # store component log likelihood
+        log_liks = log_liks.at[k].set(log_score)
+        log_liks_sgn = log_liks_sgn.at[k].set(log_score_sgn)
+    
+    # sample mixing weights pi^(s) ~ q_pi
+    # [n_mixing_mc_samples, q_pi.shape[0]]
+    pis = random.dirichlet(key, q_pi, shape=(n_mixing_mc_samples,))
+    
+    # sum over component variable for each sample pi^(s) = {pi^(s)_k}
+    # log p(x*, c=k | D, pi) = Log Sum_k pi_k * Exp(log p(x* | D, c=k))
+    # [n_mixing_mc_samples,]
+    func = lambda log_liks, log_liks_sgn, pi: logsumexp(log_liks , b=log_liks_sgn * pi, axis=0, return_sign=True)
+    log_pi_scores, log_pi_scores_sgns = vmap(func, (None, None, 0))(log_liks, log_liks_sgn, pis)
+    
+    # sum over samples pi ~ q_pi
+    # - log p(x* | D) = - Log Sum_pi 1/|pi| * Exp(log p(x*| D, c=k))
+    neg_log_posterior_predictive_density = - logsumexp(log_pi_scores, 
+                                                       b=(1/pis.shape[0]) * log_pi_scores_sgns,
+                                                       axis=0)
+    
+    return neg_log_posterior_predictive_density
+
+
+def posterior_predictive_SHD(*, key, q_pi, dists, g, n_mixing_mc_samples=100):
+    """
+    Returns predictive SHD to graph g for mixture model.
+    """
+    comp_eshd = jnp.zeros_like(q_pi)
+    # calculate ESHD for each k
+    for k, dist in zip(range(len(dists)), dists):
+        eshd_k = expected_shd(dist=dist, g=g)
+        # store component ESHD
+        comp_eshd = comp_eshd.at[k].set(eshd_k)
+    
+    # sample mixing weights pi^(s) ~ q_pi
+    # [n_mixing_mc_samples, q_pi.shape[0]]
+    pis = random.dirichlet(key, q_pi, shape=(n_mixing_mc_samples,))
+    
+    # sum over component variable for each sample pi^(s) = {pi^(s)_k}
+    # Sum_k pi_k * ESHD(G^*, q(G_k))
+    # [n_mixing_mc_samples,]
+    mc_sample_eshds = vmap(lambda comp_eshd, pi: (comp_eshd * pi).sum(axis=0), (None, 0))(comp_eshd, pis)
+    
+    # mean over MC samples pi ~ q_pi
+    posterior_predictive_SHD = mc_sample_eshds.mean(axis=0)
+    
+    return posterior_predictive_SHD
+
+
+def expected_VI(*, key, indicator, log_q_c, n_cluster_mc_samples=100):
+    """
+    MC approximates expected VI for posterior responsibilities given ground truth indicator. 
+    """
+    # [n_cluster_mc_samples, n_observations]
+    c_samples = jax.random.categorical(key, log_q_c, axis=1, shape=(n_cluster_mc_samples, log_q_c.shape[0]))
+    
+    VI = lambda c, c_pred: compare_communities(c, c_pred, method='vi')
+    # Calculate VI for each MC cluster sample 
+    # [n_cluster_mc_samples,]
+    VI_samples = jnp.array([VI(indicator, c_sample) for c_sample in c_samples])
+    
+    # Return MC average
+    return VI_samples.mean()
+
+
+        
+        
+    
