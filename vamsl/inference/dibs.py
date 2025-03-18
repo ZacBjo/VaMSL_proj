@@ -78,7 +78,7 @@ class MixtureDiBS:
         self.alpha = lambda t: (alpha_linear * t)
         self.beta = lambda t: (beta_linear * t)
         self.tau = tau
-        self.lamda=lamda
+        self.lamda = lamda
         self.n_grad_mc_samples = n_grad_mc_samples
         self.n_acyclicity_mc_samples = n_acyclicity_mc_samples
         self.n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples
@@ -555,18 +555,8 @@ class MixtureDiBS:
 
         # [1, ]
         graph_prior = self.log_graph_prior(soft_g=single_soft_g)
-        
-        """
-        # Uncommment for elicitation preference 
-        # for elicited preference based prior construction
-        # [1, ]
-        graph_elicitation_prior = self.log_graph_elicitation_prior(soft_g=single_soft_g, 
-                                                                   E=E_k,
-                                                                   N=jnp.count_nonzero(c))
-        """
 
-        return graph_prior 
-        #return graph_elicitation_prior
+        return graph_prior
     
     
 #### TESTING ELICITATION START
