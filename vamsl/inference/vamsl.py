@@ -256,16 +256,16 @@ class VaMSL(MixtureJointDiBS):
                                                       
         return log_responsibility
     
-    
-    def update_responsibilities_and_weights(self):
+        
+    def compute_log_responsibilities(self, *, x_ho):
         """
         CAVI updates for variational assigment and mixing weight distributions.
 
         Args:
-            None
+            x_ho: M new observations of shape ```[M, n_vars]```
 
         Returns:
-            None
+            log_responsibilities: responsibilities of shape ```[M, n_components]```
 
         """
         K = self.log_q_c.shape[1]
@@ -279,22 +279,33 @@ class VaMSL(MixtureJointDiBS):
         
         # Get unnormalized repsonsiibilities for components (list comprehension since component_dists can differ in size)
         # [n_observations, n_components]
-        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(self.x, 
+        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(x_ho, 
                                                                                                                   component_dists[k], 
                                                                                                                   self.q_pi[k]) for k in range(K)]))
-        
         unnorm_log_sum = logsumexp(unnorm_responsibilities, axis=1)
-        def log_normalize(unorm_log_c_n, unnorm_log_sum):
-            return unorm_log_c_n - unnorm_log_sum
-            
+        log_normalize = lambda unorm_log_c_n, unnorm_log_sum: unorm_log_c_n - unnorm_log_sum
         # Get softmax-normalized component responsibilities
         # [n_observations, n_components]
         log_responsibilities = vmap(log_normalize, (0, 0))(unnorm_responsibilities, unnorm_log_sum)
         
-        # Update variational distributions for responsibilities and mixing weights 
-        self.log_q_c = log_responsibilities
-        self.update_mixing_weigths()
+        return log_responsibilities
     
+    
+    def update_responsibilities_and_weights(self):
+        """
+        CAVI updates for variational assigment and mixing weight distributions.
+        Responsibilities and weights are updated together to avoid going out of sync. 
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        """                    
+        # Update variational distributions for responsibilities and mixing weights 
+        self.log_q_c =  self.compute_log_responsibilities(x_ho=self.x)
+        self.update_mixing_weigths()
     
     #
     # Getters and setters
