@@ -359,7 +359,7 @@ def expected_VI(*, key, indicator, log_q_c, n_cluster_mc_samples=100):
     MC approximates expected VI for posterior responsibilities given ground truth indicator. 
     """
     # [n_cluster_mc_samples, n_observations]
-    c_samples = jax.random.categorical(key, log_q_c, axis=1, shape=(n_cluster_mc_samples, log_q_c.shape[0]))
+    c_samples = random.categorical(key, log_q_c, axis=1, shape=(n_cluster_mc_samples, log_q_c.shape[0]))
     
     VI = lambda c, c_pred: compare_communities(c, c_pred, method='vi')
     # Calculate VI for each MC cluster sample 
