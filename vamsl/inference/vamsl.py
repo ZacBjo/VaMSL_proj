@@ -146,7 +146,33 @@ class VaMSL(MixtureJointDiBS):
             self.E = 0.5*jnp.ones((n_components, self.n_vars, self.n_vars))
         else:
             self.E = E 
-       
+
+            
+    def get_component_dists(self, empirical=True):
+        """
+        Get particle distributions for components. Either get empirical dist. or mixture dist. as 
+        detailed in original DiBS article. 
+
+        Args:
+            None
+
+        Returns:
+            List of length n_components with ParticleDistribution objects.
+
+        """
+        K = self.log_q_c.shape[1]
+        # Get graphs for MC-estimating expected data log likelihoods
+        # [n_components, n_particles, n_vars, n_vars]
+        component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
+        
+        # Get particle distributions for each component (list comprehension since get_empirical is impure)
+        # [n_components] of ParticleDistribution objects
+        if empirical:
+            component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(K)]
+        else:
+            component_dists = [self.get_mixture(component_gs[k], self.q_theta[k]) for k in range(K)]
+        
+        return component_dists
     
     #
     # q(z, \Theta) CAVI update
@@ -268,16 +294,12 @@ class VaMSL(MixtureJointDiBS):
             log_responsibilities: responsibilities of shape ```[M, n_components]```
 
         """
-        K = self.log_q_c.shape[1]
-        # Get graphs for MC-estimating expected data log likelihoods
-        # [n_components, n_particles, n_vars, n_vars]
-        component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
+        K = self.log_q_c.shape[1] # number of components
+        # Get particle distributions for each component
+        # [n_components] of ParticleDistribution objects
+        component_dists = self.get_component_dists()
         
-        # Get particle distributions for each component (list comprehension since get_empirical is impure)
-        # [n_components, ParticleDistribution]
-        component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(K)]
-        
-        # Get unnormalized repsonsiibilities for components (list comprehension since component_dists can differ in size)
+        # Get unnormalized repsonsibilities for components (list comprehension since component_dists can differ in size)
         # [n_observations, n_components]
         unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(x_ho, 
                                                                                                                   component_dists[k], 
