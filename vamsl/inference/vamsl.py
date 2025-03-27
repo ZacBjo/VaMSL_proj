@@ -20,6 +20,8 @@ from vamsl.models.graph import DirichletSimilarity
 
 from jax import debug
 
+from vamsl.metrics import expected_log_likelihood
+
 
 class VaMSL(MixtureJointDiBS):
     def __init__(self, *,
@@ -276,22 +278,27 @@ class VaMSL(MixtureJointDiBS):
         """
         expected_log_lik = - neg_ave_log_likelihood(dist=dist_k,
                                                     eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
-                                                    x=jnp.array(x_n.reshape((1,-1))))
+                                                    x=x_n)
+        
+        ## TEST
+        #expected_log_lik = - neg_log_posterior_predictive_density(key=random.PRNGKey(1), q_pi=jnp.ones((1,)), dists=[dist_k], eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,x=x_n.reshape(1,-1),n_mixing_mc_samples=1)
+        #expected_log_lik = expected_log_likelihood(x=x_n, dist=dist_k, eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ)
+        ## END TEST
         
         log_responsibility = expected_log_lik + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
                                                       
         return log_responsibility
     
         
-    def compute_log_responsibilities(self, *, x_ho):
+    def compute_log_responsibilities(self, *, x):
         """
         CAVI updates for variational assigment and mixing weight distributions.
 
         Args:
-            x_ho: M new observations of shape ```[M, n_vars]```
+            x: N new observations of shape ```[N, n_vars]```
 
         Returns:
-            log_responsibilities: responsibilities of shape ```[M, n_components]```
+            log_responsibilities: responsibilities of shape ```[N, n_components]```
 
         """
         K = self.log_q_c.shape[1] # number of components
@@ -301,7 +308,7 @@ class VaMSL(MixtureJointDiBS):
         
         # Get unnormalized repsonsibilities for components (list comprehension since component_dists can differ in size)
         # [n_observations, n_components]
-        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(x_ho, 
+        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(x, 
                                                                                                                   component_dists[k], 
                                                                                                                   self.q_pi[k]) for k in range(K)]))
         unnorm_log_sum = logsumexp(unnorm_responsibilities, axis=1)
@@ -326,7 +333,7 @@ class VaMSL(MixtureJointDiBS):
 
         """                    
         # Update variational distributions for responsibilities and mixing weights 
-        self.log_q_c =  self.compute_log_responsibilities(x_ho=self.x)
+        self.log_q_c =  self.compute_log_responsibilities(x=self.x)
         self.update_mixing_weigths()
     
     #
@@ -592,24 +599,33 @@ class VaMSL(MixtureJointDiBS):
         return assignments
     
     
-    def identify_MAP_classification_ordering(self, *, ground_truth_indicator):
-            """
-            Identify component indices based on ordering that maximizes MAP classification accuracy. 
+    def get_MAP_classification_predicitions(self, *, responsibilities=None):
+        if responsibilities is None:
+            return jnp.argmax(self.log_q_c, axis=1)
+        return jnp.argmax(responsibilities, axis=1)
+    
+    
+    def identify_MAP_classification_ordering(self, *, ground_truth_indicator, responsibilities=None):
+        """
+        Identify component indices based on ordering that maximizes MAP classification accuracy. 
 
-            Args:
-                ground_truth_indicators (ndarray): ndarray of shape [n_observations,] with ground truth component indicators.
+        Args:
+            ground_truth_indicators (ndarray): ndarray of shape [n_observations,] with ground truth component indicators.
 
-            Outputs:
-                order (array): array of with order of components
-            """
-            labels = jnp.arange(self.log_q_c.shape[1])
-            # Get target and predicited assignments
-            y_target = ground_truth_indicator
-            y_pred = [jnp.argmax(log_c_i) for log_c_i in self.log_q_c] 
+        Outputs:
+            order (array): array of with order of components
+        """
+        labels = jnp.arange(self.log_q_c.shape[1])
+        # Get target and predicited assignments
+        y_target = ground_truth_indicator
+        y_pred = self.get_MAP_classification_predicitions(responsibilities=responsibilities)
 
-            # Solve linear assignment problem maximizing correct assignments
-            cm = confusion_matrix(y_pred, y_target, labels=labels)        
-            indexes = linear_sum_assignment(cm, maximize=True)
+        # Solve linear assignment problem maximizing correct assignments
+        cm = confusion_matrix(y_pred, y_target, labels=labels)        
+        indexes = linear_sum_assignment(cm, maximize=True)
 
-            # Return list of optimal allocations as order of components
-            return indexes[1]
+        # Return list of optimal allocations as order of components
+        return indexes[1]
+    
+    
+    
