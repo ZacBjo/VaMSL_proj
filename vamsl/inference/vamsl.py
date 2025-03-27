@@ -406,7 +406,7 @@ class VaMSL(MixtureJointDiBS):
         self.lamda = lamda
         
         
-    def set_n_mixture_grad_mc_samples(self, n_mixture_grad_mc_samples)
+    def set_n_mixture_grad_mc_samples(self, n_mixture_grad_mc_samples):
         self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
     
     
