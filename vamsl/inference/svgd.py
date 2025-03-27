@@ -372,17 +372,20 @@ class MixtureJointDiBS(MixtureDiBS):
 
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        #dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        if isinstance(dtheta_log_prob_mc_samples, list):
-            assert False, 'Need to implement MC averaging for gradients of non-linear function parameters.'
-            # TODO
-        else:
+        if isinstance(theta, jax.Array):
+            dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
             dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
+        else:
+            # If theta is PyTree, MC averaging needs to be handled through flattening
+            dtheta_log_prob_mc_samples = [self.eltwise_grad_theta_likelihood(self.x, c_s, z, theta, t, jnp.array(batch_subk), E_k) for c_s in c]
+            treedef = jax.tree_util.tree_structure(dtheta_log_prob_mc_samples[0])
+            sample_vals = [ret[0] for ret in [jax.tree_util.tree_flatten(sample) for sample in dtheta_log_prob_mc_samples]]
+            sample_vals_mean = [jnp.array([s[i] for s in sample_vals]).mean(axis=0) for i in range(len(sample_vals[0]))]
+            dtheta_log_prob = jax.tree_util.tree_unflatten(treedef, sample_vals_mean)
+            #dtheta_log_prob= dtheta_log_prob_mc_samples[0]
             
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        #dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
         dz_log_likelihood_mc_samples, sf_baseline_mc_samples = vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
         dz_log_likelihood, sf_baseline = dz_log_likelihood_mc_samples.mean(axis=0), sf_baseline_mc_samples.mean(axis=0)
         
