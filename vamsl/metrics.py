@@ -246,6 +246,8 @@ def neg_ave_log_likelihood(*, dist, eltwise_log_likelihood, x):
         neg. ave log likelihood metric of shape ``[1,]``
     """
     assert dist.theta is not None
+    if x.ndim == 1:
+        x = x.reshape((1,-1))
     n_ho_observations, n_vars = x.shape
 
     # select acyclic graphs
@@ -264,13 +266,51 @@ def neg_ave_log_likelihood(*, dist, eltwise_log_likelihood, x):
     log_likelihood = eltwise_log_likelihood(g, theta, x)
 
     # - sum_G p(G, theta | D) log(p(x | G, theta))
-    log_score, log_score_sgn = logsumexp(
-        log_weights, b=log_likelihood, axis=0, return_sign=True)
+    log_score, log_score_sgn = logsumexp(log_weights, b=log_likelihood, axis=0, return_sign=True)
     score = - log_score_sgn * jnp.exp(log_score)
+    
     return score
 
 
-def neg_log_posterior_predictive_density(*, key, q_pi, dists, eltwise_log_likelihood, x, n_mixing_mc_samples=100):
+def expected_log_likelihood(*, x, dist, eltwise_log_likelihood, return_sign=False):
+    """
+    Compute MC approximation of expected log likelihood for observations x 
+    given a particle distribution.
+    """
+    assert dist.theta is not None
+    if x.ndim == 1:
+        x = x.reshape((1,-1))
+        
+    n_observations, n_vars = x.shape
+    # select acyclic graphs
+    is_dag = elwise_acyclic_constr_nograd(dist.g, n_vars) == 0
+    if is_dag.sum() == 0:
+        # score as empty graph only
+        g = tree_mul(dist.g, 0.0)
+        theta = tree_mul(dist.theta, 0.0)
+        log_weights = tree_mul(dist.logp, 0.0)
+    else:
+        g = dist.g[is_dag, :, :]
+        theta = tree_select(dist.theta, is_dag)
+        log_weights = dist.logp[is_dag] - logsumexp(dist.logp[is_dag])
+
+    # [len(g), 1] 
+    # log p(x* | G, theta)
+    log_likelihoods = eltwise_log_likelihood(g, theta, x)
+    # [len(g), 1] 
+    # log p(x*, G, theta | D) = log p(x* | G, theta) + log p(G, theta | D)
+    log_joint = log_likelihoods + log_weights
+
+    # [1,], [1,]
+    # log p(x* | D) = Log Sum_G Exp(log p(x*, G_k, theta_k | D))
+    if return_sign:
+        return logsumexp(log_joint, axis=0, return_sign=return_sign)
+    log_score = logsumexp(log_joint, axis=0)
+    
+    return log_score
+
+
+def single_neg_log_posterior_predictive_density(*, key, q_pi, dists, eltwise_log_likelihood, x_n, n_mixing_mc_samples=100):
     """
     Returns approximated posterior predictive density: -log p(x* | D).
     """
@@ -278,32 +318,12 @@ def neg_log_posterior_predictive_density(*, key, q_pi, dists, eltwise_log_likeli
     
     # calculate mc approximatrion of log p(x* | D, c=k) for each k
     for k, dist in zip(range(len(dists)), dists):
-        assert dist.theta is not None
-        n_observations, n_vars = x.shape
-        # select acyclic graphs
-        is_dag = elwise_acyclic_constr_nograd(dist.g, n_vars) == 0
-        if is_dag.sum() == 0:
-            # score as empty graph only
-            g = tree_mul(dist.g, 0.0)
-            theta = tree_mul(dist.theta, 0.0)
-            log_weights = tree_mul(dist.logp, 0.0)
-
-        else:
-            g = dist.g[is_dag, :, :]
-            theta = tree_select(dist.theta, is_dag)
-            log_weights = dist.logp[is_dag] - logsumexp(dist.logp[is_dag])
-        
-        # [len(g), 1] 
-        # log p(x* | G_k, theta_k, c=k)
-        log_likelihoods = eltwise_log_likelihood(g, theta, x)
-        # [len(g), 1] 
-        # log p(x*, G_k, theta_k | D, c=k) = log p(x* | G_k, theta_k, c=k) + log p(G_k, theta_k | D)
-        log_joint = log_likelihoods + log_weights
-        
         # [1,], [1,]
-        # log p(x* | D, c=k) = Log Sum_G 1/|G| * Exp(log p(x*, G_k, theta_k | D, c=k))
-        log_score, log_score_sgn = logsumexp(log_joint, b=(1/g.shape[0]) * jnp.ones_like(log_joint), 
-                                             axis=0, return_sign=True)
+        # log p(x*_n | D, c_n=k) = Sum_G,theta_k 1/|G| * Exp(log p(x*, G_k, theta_k | D, c_n=k))
+        log_score, log_score_sgn = expected_log_likelihood(x=x_n, 
+                                                           dist=dists[k], 
+                                                           eltwise_log_likelihood=eltwise_log_likelihood, 
+                                                           return_sign=True)
         
         # store component log likelihood
         log_liks = log_liks.at[k].set(log_score)
@@ -314,18 +334,39 @@ def neg_log_posterior_predictive_density(*, key, q_pi, dists, eltwise_log_likeli
     pis = random.dirichlet(key, q_pi, shape=(n_mixing_mc_samples,))
     
     # sum over component variable for each sample pi^(s) = {pi^(s)_k}
-    # log p(x*, c=k | D, pi) = Log Sum_k pi_k * Exp(log p(x* | D, c=k))
+    # log p(x*_n, c_n=k | D, pi) = Log Sum_k pi_k * Exp(log p(x*_n | D, c_n=k))
     # [n_mixing_mc_samples,]
     func = lambda log_liks, log_liks_sgn, pi: logsumexp(log_liks , b=log_liks_sgn * pi, axis=0, return_sign=True)
     log_pi_scores, log_pi_scores_sgns = vmap(func, (None, None, 0))(log_liks, log_liks_sgn, pis)
     
     # sum over samples pi ~ q_pi
-    # - log p(x* | D) = - Log Sum_pi 1/|pi| * Exp(log p(x*| D, c=k))
+    # - log p(x*_n | D) = - Log Sum_pi 1/|pi| * Exp(log p(x*_n| D, c_n=k))
     neg_log_posterior_predictive_density = - logsumexp(log_pi_scores, 
                                                        b=(1/pis.shape[0]) * log_pi_scores_sgns,
                                                        axis=0)
     
     return neg_log_posterior_predictive_density
+
+
+def mixture_lppd(*, key, q_pi, dists, eltwise_log_likelihood, x, n_mixing_mc_samples=100):
+    """
+    Computes the log point-wise predictive density for observations given a mixture model.
+    """
+    mixture_lppds = 0
+    # calculate mc approximation of \sum_n log p(x*_n | D)
+    key, *batch_subk = random.split(key, x.shape[0] + 1)
+    for n, subk in zip(range(x.shape[0]), jnp.array(batch_subk)):
+        # [1,], [1,]
+        # log p(x*_n | D) = Log Sum_pi 1/|pi| * Exp(log p(x*| D, c=k))
+        mixture_lppds += - single_neg_log_posterior_predictive_density(key=subk,
+                                                                q_pi=q_pi,
+                                                                dists=dists, 
+                                                                eltwise_log_likelihood=eltwise_log_likelihood, 
+                                                                x_n=x[n], 
+                                                                n_mixing_mc_samples=n_mixing_mc_samples)
+        
+    # Sum_n log p(x*_n| D)
+    return mixture_lppds
 
 
 def posterior_predictive_SHD(*, key, q_pi, dists, g, n_mixing_mc_samples=100):
@@ -369,6 +410,57 @@ def expected_VI(*, key, indicator, log_q_c, n_cluster_mc_samples=100):
     # Return MC average
     return VI_samples.mean()
 
+
+def ordered_MAP_classification_accuracy(*, indicator, order, MAP_preds):
+    """
+    Computes accuracy of classification based on log responsibilities and supplied ordering 
+    of indicators with respect to component indeces. 
+    """
+    # Get MAP predicitions from responsibilities and order according to ground truths
+    ordered_MAP_preds = [order[k] for k in MAP_preds]
+        
+    return sklearn_metrics.accuracy_score(indicator, ordered_MAP_preds)
+
+
+def MAP_assigned_lppd(*, x, MAP_assignments, dists, eltwise_log_likelihood):
+    """
+    Computes the point-wise negative log predictive density for all observations given 
+    component-wise assignments. 
+    """
+    lppds, lppds_sgn = jnp.zeros((x.shape[0],)), jnp.zeros((x.shape[0],))
+    # calculate mc approximation of \sum_n log p(x*_n | D, c_n=k)
+    for n in range(x.shape[0]):
+        # [1,], [1,]
+        # log p(x*_n | D, c_n=k) = Sum_G,theta_k 1/|G| * Exp(log p(x*, G_k, theta_k | D, c_n=k))
+        log_score, log_score_sgn = expected_log_likelihood(x=x[n], 
+                                                           dist=dists[MAP_assignments[n]], 
+                                                           eltwise_log_likelihood=eltwise_log_likelihood, 
+                                                           return_sign=True)
+        
+        lppds = lppds.at[n].set(log_score)
+        lppds_sgn = lppds_sgn.at[n].set(log_score_sgn)
+    
+    # - Sum_n log p(x*| D, c=k)
+    lppd = jnp.sum(lppds*lppds_sgn)
+    
+    return lppd
+
+
+def MAP_assigned_neg_ave_log_lik(*, x, MAP_assignments, dists, eltwise_log_likelihood):
+    """
+    Computes neg. ave log likelihood for observations assigned to different components
+    of a mixture model.
+    """
+    negLL = 0
+    for k in range(len(dists)):
+        negLL += neg_ave_log_likelihood(dist=dists[k],
+                                        eltwise_log_likelihood=eltwise_log_likelihood,
+                                        x=x[MAP_assignments==k])
+        
+    return negLL
+        
+    
+    
 
         
         
