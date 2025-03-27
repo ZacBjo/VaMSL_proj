@@ -402,6 +402,14 @@ class VaMSL(MixtureJointDiBS):
         return self.E
     
     
+    def set_lamda(self, lamda):
+        self.lamda = lamda
+        
+        
+    def set_n_mixture_grad_mc_samples(self, n_mixture_grad_mc_samples)
+        self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
+    
+    
     #
     # Overriding functions for conditional graph information (prior and elicited)  
     #
