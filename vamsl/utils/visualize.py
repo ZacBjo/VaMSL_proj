@@ -22,8 +22,10 @@ def visualize_ground_truths(mats, size=4.0, columns=7,graph_label='Ground truth 
     """    
     `mats`: ndarray of shape (n_ground_truths, d, d) 
     """
-    if len(mats.shape) == 2 or (len(mats.shape) == 3 and mats.shape[0] == 1):
+    if len(mats.shape) == 2:
         return visualize_ground_truth(mats, graph_label=graph_label)
+    elif len(mats.shape) == 3 and mats.shape[0] == 1:
+        return visualize_ground_truth(mats[0], graph_label=graph_label)
         
     cols = min(len(mats), columns)
     rows = 1 + ((len(mats)-1)//cols)
