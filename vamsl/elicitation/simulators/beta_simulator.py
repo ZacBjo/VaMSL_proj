@@ -29,15 +29,23 @@ class beta_simulator:
         # Return edge probability 
         a, b = 1+edge_probs[i,j], 1+(1-edge_probs[i,j])
         
-        return beta.logpdf(x, a, b=b)
+        return beta.logpdf(y, a, b=b)
     
     
     def get_experiment_log_likelihood(self, y, edge_probs, experiment):
         return self.get_exp_log_prob(y, edge_probs, experiment)
+    
+    
+    def get_edge_prob(self, edge_probs, experiment):
+        # An experiment corresponds to asking about a single edge
+        i, j = experiment[0], experiment[1]
         
+        # Return edge probability 
+        return edge_probs[i,j]
+    
         
     def run_experiment(self, key, edge_probs, experiment):
         # Get edge probability for edge defined by experiment
         edge_prob = self.get_edge_prob(edge_probs, experiment)
         
-        return random.beta(key, 1+(c*edge_prob), 1+(c*(1-edge_prob)))
+        return random.beta(key, 1+(self.c*edge_prob), 1+(self.c*(1-edge_prob)))
