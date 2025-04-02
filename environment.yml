@@ -3,6 +3,7 @@ channels:
 - conda-forge
 dependencies:
 - numpy
+- pandas
 - python=3.11
 - imageio
 - tqdm
@@ -17,4 +18,5 @@ dependencies:
     - dm-haiku
     - dm-sonnet
     - reverb
+    - igraph
     - .
