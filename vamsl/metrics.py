@@ -399,10 +399,10 @@ def single_expected_log_mixture_lik(*, key, q_pi, dists, eltwise_log_likelihood,
         # [n_mixing_mc_samples, q_pi.shape[0]]
         pis = random.dirichlet(key, q_pi, shape=(n_mixing_mc_samples,))
         for k in range(K):
-            g_k, theta_k = samples[k][0][s], samples[k][1][s]
-            log_liks = log_liks.at[k].set(eltwise_log_likelihood(jnp.array([g_k]), 
-                                                                 jnp.array([theta_k]), 
-                                                                 x_n).item())
+            g_k, theta_k = samples[k][0], samples[k][1]
+            log_liks = log_liks.at[k].set(eltwise_log_likelihood(g_k, 
+                                                                 theta_k, 
+                                                                 x_n)[s].item())
             
         func = lambda log_liks, pi: logsumexp(log_liks , b=pi, axis=0)
         log_pi_scores = vmap(func, (None, 0))(log_liks, pis)
