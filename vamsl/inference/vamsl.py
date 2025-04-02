@@ -47,6 +47,7 @@ class VaMSL(MixtureJointDiBS):
                  beta_linear=1.0,
                  tau=1.0,
                  lamda=0.0,
+                 elicitation_prior=None, #'soft', 'hard' or None
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
@@ -66,9 +67,15 @@ class VaMSL(MixtureJointDiBS):
 
         self.component_likelihood_model = component_likelihood_model
         # functions for post-hoc likelihood evaluations
+        # Likelihood p(x | G, \Theta)
         self.eltwise_component_log_likelihood_observ = vmap(lambda g, theta, x_ho: 
-            component_likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
+            component_likelihood_model.log_likelihood(g=g, theta=theta, x=x_ho, interv_targets=jnp.zeros_like(x_ho)), (0, 0, None), 0)
         self.eltwise_component_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
+            component_likelihood_model.log_likelihoodb(g=g, theta=theta, x=x_ho, interv_targets=interv_msk_ho), (0, 0, None, None), 0)
+        # Joint likelihood p(x, \Theta | G)
+        self.eltwise_component_log_joint_likelihood_observ = vmap(lambda g, theta, x_ho: 
+            component_likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
+        self.eltwise_component_log_joint_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
             component_likelihood_model.interventional_log_joint_prob(g, theta, x_ho, interv_msk_ho, None), (0, 0, None, None), 0)
 
         # init VaMSL SVGD superclass methods
@@ -86,6 +93,7 @@ class VaMSL(MixtureJointDiBS):
             beta_linear=beta_linear,
             tau=tau,
             lamda=lamda,
+            elicitation_prior=elicitation_prior,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_mixture_grad_mc_samples=n_mixture_grad_mc_samples,
