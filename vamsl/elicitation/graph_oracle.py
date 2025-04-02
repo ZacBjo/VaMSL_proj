@@ -4,6 +4,8 @@ from jax import random
 from jax.lax import cond
 import numpy as np
 
+from jax.scipy.stats import beta
+
 class graphOracle:
     def __init__(self, graphs):
         """
@@ -30,7 +32,7 @@ class graphOracle:
         """
         i, j = query[0], query[1]
         if soft:
-            return jnp.abs(np.random.beta(15, 4) - 1 + self.graphs[component][i, j])
+            return jnp.abs(0.9 - 1 + self.graphs[component][i, j])
         else:
             return self.graphs[component][i, j]
     
@@ -58,15 +60,15 @@ class graphOracle:
         """
         i, j = query[0], query[1]
         
-        # Get a uniform sample to determine correctness of response 
-        key, subk = random.split(key)
-        u = random.uniform(key=subk, minval=0, maxval=1)
         if soft:
-            e_ij = cond(u > reliability,
-                        lambda i, j: 1-jnp.abs(random.beta(key, 15, 4) - 1 + self.graphs[component][i, j]),
-                        lambda i, j: jnp.abs(random.beta(key, 2, 2) - 1 + self.graphs[component][i, j]),
-                        i,j)
+            m, s = reliability # unpack mean and std from sof reliability
+            m = jnp.abs(m - 1 + self.graphs[component][i, j]) # invert mean depending on edge existence
+            get_alpha = lambda m, s: m * (((m * (1-m)) / s**2)-1)
+            get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2)-1)
+            e_ij = random.beta(key=key, a=get_alpha(m,s), b=get_beta(m,s))
         else:
+            # Get a uniform sample to determine correctness of response 
+            u = random.uniform(key=key, minval=0, maxval=1)
             # if sample is above reliability coef, return wrong answer
             e_ij = cond(u > reliability, 
                         lambda i, j: 1 - self.graphs[component][i, j],
@@ -90,7 +92,7 @@ class graphOracle:
     
     
     def update_elicitation_matrix(self, *, E, component, queries, stochastic=False, key=None, reliability=None, soft=False):
-        if stochastic and reliability < 1:
+        if stochastic and not reliability == 1:
             responses = self.stochastically_answer_queries(key=key, reliability=reliability,
                                                            component=component, queries=queries,soft=soft)
         else:
