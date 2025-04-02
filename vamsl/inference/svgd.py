@@ -77,6 +77,7 @@ class MixtureJointDiBS(MixtureDiBS):
                  beta_linear=1.0,
                  tau=1.0,
                  lamda=0.0,
+                 elicitation_prior=None,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
@@ -107,6 +108,7 @@ class MixtureJointDiBS(MixtureDiBS):
             beta_linear=beta_linear,
             tau=tau,
             lamda=lamda,
+            elicitation_prior=elicitation_prior,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples,
@@ -121,10 +123,10 @@ class MixtureJointDiBS(MixtureDiBS):
         self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
         
         # functions for post-hoc likelihood evaluations
-        self.eltwise_log_likelihood_observ = vmap(lambda g, theta, x_ho:
-            likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
-        self.eltwise_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
-            likelihood_model.interventional_log_joint_prob(g, theta, x_ho, interv_msk_ho, None), (0, 0, None, None), 0)
+        #self.eltwise_log_likelihood_observ = vmap(lambda g, theta, x_ho:
+        #    likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
+        #self.eltwise_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
+        #    likelihood_model.interventional_log_joint_prob(g, theta, x_ho, interv_msk_ho, None), (0, 0, None, None), 0)
 
         self.kernel = kernel(**kernel_param)
 
