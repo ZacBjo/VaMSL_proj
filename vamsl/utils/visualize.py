@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import imageio
 
 
-def visualize_ground_truth(mat, size=4.0):
+def visualize_ground_truth(mat, size=4.0, graph_label='Ground truth $G^*$'):
     """    
     `mat`: (d, d) 
     """
@@ -13,22 +13,20 @@ def visualize_ground_truth(mat, size=4.0):
     plt.setp(ax.get_xticklabels(), visible=False)
     plt.setp(ax.get_yticklabels(), visible=False)
     ax.tick_params(axis='both', which='both', length=0)
-    ax.set_title(r'Ground truth $G^*$', pad=10)
+    ax.set_title(f'{graph_label}', pad=10)
     plt.show()
     return
 
 
-def visualize_ground_truths(mats, size=4.0, columns=7):
+def visualize_ground_truths(mats, size=4.0, columns=7,graph_label='Ground truth graph'):
     """    
-    `mats`: (n_ground_truths, d, d) 
+    `mats`: ndarray of shape (n_ground_truths, d, d) 
     """
-    if not isinstance(mats, list):
-        visualize_ground_truth(mats)
-        return
-    elif len(mats) == 1:
-        visualize_ground_truth(mats[0])
-        return
-    
+    if len(mats.shape) == 2:
+        return visualize_ground_truth(mats, graph_label=graph_label)
+    elif len(mats.shape) == 3 and mats.shape[0] == 1:
+        return visualize_ground_truth(mats[0], graph_label=graph_label)
+        
     cols = min(len(mats), columns)
     rows = 1 + ((len(mats)-1)//cols)
     plt.rcParams['figure.figsize'] = [cols*size, rows*size]
@@ -42,7 +40,7 @@ def visualize_ground_truths(mats, size=4.0, columns=7):
         plt.setp(axs[i,j].get_xticklabels(), visible=False)
         plt.setp(axs[i,j].get_yticklabels(), visible=False)
         axs[i,j].tick_params(axis='both', which='both', length=0)
-        axs[i,j].set_title(f'Ground truth graph {n+1}', pad=10)
+        axs[i,j].set_title(f'{graph_label} {n+1}', pad=10)
     plt.show()
     return
 

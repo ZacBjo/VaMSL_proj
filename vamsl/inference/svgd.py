@@ -77,6 +77,7 @@ class MixtureJointDiBS(MixtureDiBS):
                  beta_linear=1.0,
                  tau=1.0,
                  lamda=0.0,
+                 elicitation_prior=None,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
@@ -107,6 +108,7 @@ class MixtureJointDiBS(MixtureDiBS):
             beta_linear=beta_linear,
             tau=tau,
             lamda=lamda,
+            elicitation_prior=elicitation_prior,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples,
@@ -121,10 +123,10 @@ class MixtureJointDiBS(MixtureDiBS):
         self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
         
         # functions for post-hoc likelihood evaluations
-        self.eltwise_log_likelihood_observ = vmap(lambda g, theta, x_ho:
-            likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
-        self.eltwise_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
-            likelihood_model.interventional_log_joint_prob(g, theta, x_ho, interv_msk_ho, None), (0, 0, None, None), 0)
+        #self.eltwise_log_likelihood_observ = vmap(lambda g, theta, x_ho:
+        #    likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
+        #self.eltwise_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
+        #    likelihood_model.interventional_log_joint_prob(g, theta, x_ho, interv_msk_ho, None), (0, 0, None, None), 0)
 
         self.kernel = kernel(**kernel_param)
 
@@ -372,17 +374,20 @@ class MixtureJointDiBS(MixtureDiBS):
 
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        #dtheta_log_prob = self.eltwise_grad_theta_likelihood(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        if isinstance(dtheta_log_prob_mc_samples, list):
-            assert False, 'Need to implement MC averaging for gradients of non-linear function parameters.'
-            # TODO
-        else:
+        if isinstance(theta, jax.Array):
+            dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
             dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
+        else:
+            # If theta is PyTree, MC averaging needs to be handled through flattening
+            dtheta_log_prob_mc_samples = [self.eltwise_grad_theta_likelihood(self.x, c_s, z, theta, t, jnp.array(batch_subk), E_k) for c_s in c]
+            treedef = jax.tree_util.tree_structure(dtheta_log_prob_mc_samples[0])
+            sample_vals = [ret[0] for ret in [jax.tree_util.tree_flatten(sample) for sample in dtheta_log_prob_mc_samples]]
+            sample_vals_mean = [jnp.array([s[i] for s in sample_vals]).mean(axis=0) for i in range(len(sample_vals[0]))]
+            dtheta_log_prob = jax.tree_util.tree_unflatten(treedef, sample_vals_mean)
+            #dtheta_log_prob= dtheta_log_prob_mc_samples[0]
             
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        #dz_log_likelihood, sf_baseline = self.eltwise_grad_z_likelihood(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
         dz_log_likelihood_mc_samples, sf_baseline_mc_samples = vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
         dz_log_likelihood, sf_baseline = dz_log_likelihood_mc_samples.mean(axis=0), sf_baseline_mc_samples.mean(axis=0)
         

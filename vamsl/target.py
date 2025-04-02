@@ -373,7 +373,8 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
                                                                      graph_prior_str=graph_type,
                                                                      edges_per_node=edges_per_node,
                                                                      n_observations=int(n_comp_obs.item()),
-                                                                     obs_noise=obs_noise, sig_param=sig_param, hidden_layers=hidden_layers)
+                                                                     obs_noise=obs_noise, sig_param=sig_param, 
+                                                                     hidden_layers=hidden_layers)
         xs.append(data.x)
         graphs.append(data.g)
         thetas.append(data.theta)

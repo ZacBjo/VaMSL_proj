@@ -20,6 +20,8 @@ from vamsl.models.graph import DirichletSimilarity
 
 from jax import debug
 
+from vamsl.metrics import expected_log_likelihood
+
 
 class VaMSL(MixtureJointDiBS):
     def __init__(self, *,
@@ -45,6 +47,7 @@ class VaMSL(MixtureJointDiBS):
                  beta_linear=1.0,
                  tau=1.0,
                  lamda=0.0,
+                 elicitation_prior=None, #'soft', 'hard' or None
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
@@ -64,9 +67,15 @@ class VaMSL(MixtureJointDiBS):
 
         self.component_likelihood_model = component_likelihood_model
         # functions for post-hoc likelihood evaluations
+        # Likelihood p(x | G, \Theta)
         self.eltwise_component_log_likelihood_observ = vmap(lambda g, theta, x_ho: 
-            component_likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
+            component_likelihood_model.log_likelihood(g=g, theta=theta, x=x_ho, interv_targets=jnp.zeros_like(x_ho)), (0, 0, None), 0)
         self.eltwise_component_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
+            component_likelihood_model.log_likelihoodb(g=g, theta=theta, x=x_ho, interv_targets=interv_msk_ho), (0, 0, None, None), 0)
+        # Joint likelihood p(x, \Theta | G)
+        self.eltwise_component_log_joint_likelihood_observ = vmap(lambda g, theta, x_ho: 
+            component_likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
+        self.eltwise_component_log_joint_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
             component_likelihood_model.interventional_log_joint_prob(g, theta, x_ho, interv_msk_ho, None), (0, 0, None, None), 0)
 
         # init VaMSL SVGD superclass methods
@@ -84,6 +93,7 @@ class VaMSL(MixtureJointDiBS):
             beta_linear=beta_linear,
             tau=tau,
             lamda=lamda,
+            elicitation_prior=elicitation_prior,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_mixture_grad_mc_samples=n_mixture_grad_mc_samples,
@@ -146,7 +156,33 @@ class VaMSL(MixtureJointDiBS):
             self.E = 0.5*jnp.ones((n_components, self.n_vars, self.n_vars))
         else:
             self.E = E 
-       
+
+            
+    def get_component_dists(self, empirical=True):
+        """
+        Get particle distributions for components. Either get empirical dist. or mixture dist. as 
+        detailed in original DiBS article. 
+
+        Args:
+            None
+
+        Returns:
+            List of length n_components with ParticleDistribution objects.
+
+        """
+        K = self.log_q_c.shape[1]
+        # Get graphs for MC-estimating expected data log likelihoods
+        # [n_components, n_particles, n_vars, n_vars]
+        component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
+        
+        # Get particle distributions for each component (list comprehension since get_empirical is impure)
+        # [n_components] of ParticleDistribution objects
+        if empirical:
+            component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(K)]
+        else:
+            component_dists = [self.get_mixture(component_gs[k], self.q_theta[k]) for k in range(K)]
+        
+        return component_dists
     
     #
     # q(z, \Theta) CAVI update
@@ -250,16 +286,52 @@ class VaMSL(MixtureJointDiBS):
         """
         expected_log_lik = - neg_ave_log_likelihood(dist=dist_k,
                                                     eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
-                                                    x=jnp.array(x_n.reshape((1,-1))))
+                                                    x=x_n)
+        
+        ## TEST
+        #expected_log_lik = - neg_log_posterior_predictive_density(key=random.PRNGKey(1), q_pi=jnp.ones((1,)), dists=[dist_k], eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,x=x_n.reshape(1,-1),n_mixing_mc_samples=1)
+        #expected_log_lik = expected_log_likelihood(x=x_n, dist=dist_k, eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ)
+        ## END TEST
         
         log_responsibility = expected_log_lik + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
                                                       
         return log_responsibility
     
+        
+    def compute_log_responsibilities(self, *, x):
+        """
+        CAVI updates for variational assigment and mixing weight distributions.
+
+        Args:
+            x: N new observations of shape ```[N, n_vars]```
+
+        Returns:
+            log_responsibilities: responsibilities of shape ```[N, n_components]```
+
+        """
+        K = self.log_q_c.shape[1] # number of components
+        # Get particle distributions for each component
+        # [n_components] of ParticleDistribution objects
+        component_dists = self.get_component_dists()
+        
+        # Get unnormalized repsonsibilities for components (list comprehension since component_dists can differ in size)
+        # [n_observations, n_components]
+        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(x, 
+                                                                                                                  component_dists[k], 
+                                                                                                                  self.q_pi[k]) for k in range(K)]))
+        unnorm_log_sum = logsumexp(unnorm_responsibilities, axis=1)
+        log_normalize = lambda unorm_log_c_n, unnorm_log_sum: unorm_log_c_n - unnorm_log_sum
+        # Get softmax-normalized component responsibilities
+        # [n_observations, n_components]
+        log_responsibilities = vmap(log_normalize, (0, 0))(unnorm_responsibilities, unnorm_log_sum)
+        
+        return log_responsibilities
+    
     
     def update_responsibilities_and_weights(self):
         """
         CAVI updates for variational assigment and mixing weight distributions.
+        Responsibilities and weights are updated together to avoid going out of sync. 
 
         Args:
             None
@@ -267,34 +339,10 @@ class VaMSL(MixtureJointDiBS):
         Returns:
             None
 
-        """
-        K = self.log_q_c.shape[1]
-        # Get graphs for MC-estimating expected data log likelihoods
-        # [n_components, n_particles, n_vars, n_vars]
-        component_gs = self.compwise_particle_to_g_lim(self.q_z, self.E)
-        
-        # Get particle distributions for each component (list comprehension since get_empirical is impure)
-        # [n_components, ParticleDistribution]
-        component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(K)]
-        
-        # Get unnormalized repsonsiibilities for components (list comprehension since component_dists can differ in size)
-        # [n_observations, n_components]
-        unnorm_responsibilities = jnp.transpose(jnp.array([vmap(self.compute_log_responsibility, (0, None, None))(self.x, 
-                                                                                                                  component_dists[k], 
-                                                                                                                  self.q_pi[k]) for k in range(K)]))
-        
-        unnorm_log_sum = logsumexp(unnorm_responsibilities, axis=1)
-        def log_normalize(unorm_log_c_n, unnorm_log_sum):
-            return unorm_log_c_n - unnorm_log_sum
-            
-        # Get softmax-normalized component responsibilities
-        # [n_observations, n_components]
-        log_responsibilities = vmap(log_normalize, (0, 0))(unnorm_responsibilities, unnorm_log_sum)
-        
+        """                    
         # Update variational distributions for responsibilities and mixing weights 
-        self.log_q_c = log_responsibilities
+        self.log_q_c =  self.compute_log_responsibilities(x=self.x)
         self.update_mixing_weigths()
-    
     
     #
     # Getters and setters
@@ -360,6 +408,14 @@ class VaMSL(MixtureJointDiBS):
 
         """
         return self.E
+    
+    
+    def set_lamda(self, lamda):
+        self.lamda = lamda
+        
+        
+    def set_n_mixture_grad_mc_samples(self, n_mixture_grad_mc_samples):
+        self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
     
     
     #
@@ -559,24 +615,33 @@ class VaMSL(MixtureJointDiBS):
         return assignments
     
     
-    def identify_MAP_classification_ordering(self, *, ground_truth_indicator):
-            """
-            Identify component indices based on ordering that maximizes MAP classification accuracy. 
+    def get_MAP_classification_predicitions(self, *, responsibilities=None):
+        if responsibilities is None:
+            return jnp.argmax(self.log_q_c, axis=1)
+        return jnp.argmax(responsibilities, axis=1)
+    
+    
+    def identify_MAP_classification_ordering(self, *, ground_truth_indicator, responsibilities=None):
+        """
+        Identify component indices based on ordering that maximizes MAP classification accuracy. 
 
-            Args:
-                ground_truth_indicators (ndarray): ndarray of shape [n_observations,] with ground truth component indicators.
+        Args:
+            ground_truth_indicators (ndarray): ndarray of shape [n_observations,] with ground truth component indicators.
 
-            Outputs:
-                order (array): array of with order of components
-            """
-            labels = jnp.arange(self.log_q_c.shape[1])
-            # Get target and predicited assignments
-            y_target = ground_truth_indicator
-            y_pred = [jnp.argmax(log_c_i) for log_c_i in self.log_q_c] 
+        Outputs:
+            order (array): array of with order of components
+        """
+        labels = jnp.arange(self.log_q_c.shape[1])
+        # Get target and predicited assignments
+        y_target = ground_truth_indicator
+        y_pred = self.get_MAP_classification_predicitions(responsibilities=responsibilities)
 
-            # Solve linear assignment problem maximizing correct assignments
-            cm = confusion_matrix(y_pred, y_target, labels=labels)        
-            indexes = linear_sum_assignment(cm, maximize=True)
+        # Solve linear assignment problem maximizing correct assignments
+        cm = confusion_matrix(y_pred, y_target, labels=labels)        
+        indexes = linear_sum_assignment(cm, maximize=True)
 
-            # Return list of optimal allocations as order of components
-            return indexes[1]
+        # Return list of optimal allocations as order of components
+        return indexes[1]
+    
+    
+    
