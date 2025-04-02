@@ -429,3 +429,81 @@ class ElicitationBernoulli:
         elicited_logpost = jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator)) - jnp.sum(jnp.where(E == 0.5, 0, logdenominator))
         
         return elicited_logpost
+    
+    
+class SoftGraphElicitationBeta:
+    """
+    Elicted prior term based on elictied edge probabilities.  
+
+    :math:`log p(Y, G(Z)) = log p(G(Z) \\mid Y) + log p(Y)`
+
+    where :math:`p(G \\mid Y)` denotes elicitation likelihood
+    and :math:`p(Y)` denotes prior over expert edge beliefs.
+
+    Args:
+        n_vars (int): number of variables in DAG
+        n_edges_per_node (int): number of edges sampled per variable
+
+    """
+
+    def __init__(self):
+        pass
+
+    def joint_unnorm_log_prob(self, *, soft_G, E, alpha_e=1, beta_e=1, std_e_lik=0.2):
+        """
+        Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
+
+        Args:
+            G (ndarray): graph adjacency matrix
+            E (ndarray): elcitied edge probabilities of shape
+            N (int): number of observations, scales the impact of expert beliefs on prior probs
+
+        Returns:
+            log joint probability corresponding to edge probabilities in :math:`G | E_soft`
+
+        """
+        prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
+        # Mask hard constraints as uniform to remove their influence (hard constraints are applied via p(G|Z,E))
+        E = jnp.where(E == 1.0,
+                      0.5,
+                      jnp.where(E == 0.0, 
+                                0.5,
+                                # [n_observations, n_vars]
+                                E
+                               )
+                     )
+        
+        soft_G = jnp.where(soft_G == 1.0,
+                      soft_G-10**-7,
+                      jnp.where(soft_G == 0.0, 
+                                soft_G+10**7,
+                                # [n_observations, n_vars]
+                                soft_G
+                               )
+                     )
+        
+        #get_alpha = lambda m, s: - m * ((s**2 + m**2 - m) / s**2)
+        #get_alpha = lambda m, s: (m**2 *(1-m)) / s**2
+        get_alpha = lambda m, s: m * (((m * (1-m)) / s**2)-1)
+        #get_beta = lambda m, s: ((s**2+m**2-m)*(m-1))/s**2
+        #get_beta = lambda m, s: (m * (1-m)**2) / s**2
+        get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2)-1)
+        
+        #debug.print('a: {x}',x=jnp.absolute(get_alpha(E, std_e_lik).mean()))
+        #debug.print('b: {x}',x=jnp.absolute(get_beta(E, std_e_lik).mean()))
+        
+        # get bernoulli probs for edges and complement for absent edges 
+        elicited_logliks = beta.logpdf(soft_G, a=get_alpha(E, std_e_lik), b=get_beta(E, std_e_lik))
+        #debug.print('soft_g: \n{x}',x=soft_G)
+        #debug.print('lik: {x}',x=jnp.absolute(elicited_logliks.mean()))
+        
+        elicited_logpriors = beta.logpdf(E, a=prior_alphas, b=prior_betas)
+        #debug.print('Prio: {x}',x=jnp.absolute(elicited_logpriors.mean()))
+        elicited_lognumerator = elicited_logliks+elicited_logpriors
+        #debug.print('num: {x}',x=jnp.absolute(elicited_lognumerator.mean()))
+        
+        # Remove probs from (un)elicited values, default at 0.5
+        elicited_unnorm_logpost = jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator))
+        #debug.print('logpost: {x}',x=elicited_unnorm_logpost)
+        
+        return elicited_unnorm_logpost
