@@ -231,7 +231,7 @@ def neg_ave_log_likelihood(*, dist, eltwise_log_likelihood, x):
     """
     Computes neg. ave log likelihood for a joint posterior over :math:`(G, \\Theta)`, defined as
 
-    :math:`\\text{neg. LL}(p, G^*) := - \\sum_G \\int_{\\Theta} p(G, \\Theta | D)  p(D^{\\text{test}} | G, \\Theta)`
+    :math:`\\text{neg. LL}(p, G^*) := - \\sum_G \\int_{\\Theta} p(G, \\Theta | D)  log p(D^{\\text{test}} | G, \\Theta)`
 
     Args:
         dist (:class:`dibs.metrics.ParticleDistribution`): particle distribution
@@ -266,10 +266,28 @@ def neg_ave_log_likelihood(*, dist, eltwise_log_likelihood, x):
     log_likelihood = eltwise_log_likelihood(g, theta, x)
 
     # - sum_G p(G, theta | D) log(p(x | G, theta))
-    log_score, log_score_sgn = logsumexp(log_weights, b=log_likelihood, axis=0, return_sign=True)
+    log_score, log_score_sgn = logsumexp(
+        log_weights, b=log_likelihood, axis=0, return_sign=True)
     score = - log_score_sgn * jnp.exp(log_score)
     
     return score
+
+
+def empirical_sample_BNs(*, dist, n_vars):
+    assert dist.theta is not None
+    # select acyclic graphs
+    is_dag = elwise_acyclic_constr_nograd(dist.g, n_vars) == 0
+    if is_dag.sum() == 0:
+        # score as empty graph only
+        g = tree_mul(dist.g, 0.0)
+        theta = tree_mul(dist.theta, 0.0)
+        log_weights = tree_mul(dist.logp, 0.0)
+    else:
+        g = dist.g[is_dag, :, :]
+        theta = tree_select(dist.theta, is_dag)
+        log_weights = dist.logp[is_dag] - logsumexp(dist.logp[is_dag])
+    
+    return (g, theta, log_weights)
 
 
 def expected_log_likelihood(*, x, dist, eltwise_log_likelihood, return_sign=False):
@@ -283,20 +301,12 @@ def expected_log_likelihood(*, x, dist, eltwise_log_likelihood, return_sign=Fals
         
     n_observations, n_vars = x.shape
     # select acyclic graphs
-    is_dag = elwise_acyclic_constr_nograd(dist.g, n_vars) == 0
-    if is_dag.sum() == 0:
-        # score as empty graph only
-        g = tree_mul(dist.g, 0.0)
-        theta = tree_mul(dist.theta, 0.0)
-        log_weights = tree_mul(dist.logp, 0.0)
-    else:
-        g = dist.g[is_dag, :, :]
-        theta = tree_select(dist.theta, is_dag)
-        log_weights = dist.logp[is_dag] - logsumexp(dist.logp[is_dag])
+    g, theta, log_weights = empirical_sample_BNs(dist=dist, n_vars=n_vars)
 
     # [len(g), 1] 
     # log p(x* | G, theta)
     log_likelihoods = eltwise_log_likelihood(g, theta, x)
+
     # [len(g), 1] 
     # log p(x*, G, theta | D) = log p(x* | G, theta) + log p(G, theta | D)
     log_joint = log_likelihoods + log_weights
@@ -314,6 +324,10 @@ def single_neg_log_posterior_predictive_density(*, key, q_pi, dists, eltwise_log
     """
     Returns approximated posterior predictive density: -log p(x* | D).
     """
+    # sample mixing weights pi^(s) ~ q_pi
+    # [n_mixing_mc_samples, q_pi.shape[0]]
+    pis = random.dirichlet(key, q_pi, shape=(n_mixing_mc_samples,))
+    
     log_liks, log_liks_sgn = jnp.zeros_like(q_pi), jnp.zeros_like(q_pi)
     
     # calculate mc approximatrion of log p(x* | D, c=k) for each k
@@ -329,9 +343,7 @@ def single_neg_log_posterior_predictive_density(*, key, q_pi, dists, eltwise_log
         log_liks = log_liks.at[k].set(log_score)
         log_liks_sgn = log_liks_sgn.at[k].set(log_score_sgn)
     
-    # sample mixing weights pi^(s) ~ q_pi
-    # [n_mixing_mc_samples, q_pi.shape[0]]
-    pis = random.dirichlet(key, q_pi, shape=(n_mixing_mc_samples,))
+    
     
     # sum over component variable for each sample pi^(s) = {pi^(s)_k}
     # log p(x*_n, c_n=k | D, pi) = Log Sum_k pi_k * Exp(log p(x*_n | D, c_n=k))
@@ -367,6 +379,59 @@ def mixture_lppd(*, key, q_pi, dists, eltwise_log_likelihood, x, n_mixing_mc_sam
         
     # Sum_n log p(x*_n| D)
     return mixture_lppds
+
+
+def single_expected_log_mixture_lik(*, key, q_pi, dists, eltwise_log_likelihood, x_n, n_mixing_mc_samples=100):
+    """
+    Returns approximated expectation: E_G(log p(x*_n | G)).
+    """
+    if x_n.ndim == 1:
+        x_n = x_n.reshape((1,-1))
+        
+    # K number of tuples (g, theta, log_weights) 
+    samples = [empirical_sample_BNs(dist=dist, n_vars=x_n.shape[1]) for dist in dists]
+    num_samples, K = min([sample[0].shape[0] for sample in samples]), len(dists)
+    
+    sample_scores = jnp.zeros((num_samples,))
+    for s in range(num_samples):
+        log_liks = jnp.zeros((K,))
+        # sample mixing weights pi^(s) ~ q_pi
+        # [n_mixing_mc_samples, q_pi.shape[0]]
+        pis = random.dirichlet(key, q_pi, shape=(n_mixing_mc_samples,))
+        for k in range(K):
+            g_k, theta_k = samples[k][0][s], samples[k][1][s]
+            log_liks = log_liks.at[k].set(eltwise_log_likelihood(jnp.array([g_k]), 
+                                                                 jnp.array([theta_k]), 
+                                                                 x_n).item())
+            
+        func = lambda log_liks, pi: logsumexp(log_liks , b=pi, axis=0)
+        log_pi_scores = vmap(func, (None, 0))(log_liks, pis)
+        sample_scores  = sample_scores.at[s].set(log_pi_scores.mean())
+    
+    return sample_scores.mean()
+
+
+def expected_log_mixture_lik(*, key, q_pi, dists, eltwise_log_likelihood, x, n_mixing_mc_samples=100):
+    """
+    Computes the expected score (marginalizing the mixture components) for observations given a mixture model.
+    """
+    if x.ndim == 1:
+        x = x.reshape((1,-1))
+        
+    expected_mixture_scores = 0
+    key, *batch_subk = random.split(key, x.shape[0] + 1)
+    for n, subk in zip(range(x.shape[0]), jnp.array(batch_subk)):
+        # [1,], [1,]
+        # log p(x*_n | D) = Log Sum_pi 1/|pi| * Exp(log p(x*| D, c=k))
+        expected_mixture_scores += single_expected_log_mixture_lik(key=subk,
+                                                                   q_pi=q_pi,
+                                                                   dists=dists,
+                                                                   eltwise_log_likelihood=eltwise_log_likelihood,
+                                                                   x_n=x[n],
+                                                                   n_mixing_mc_samples=n_mixing_mc_samples)
+        
+    # Sum_n sum_pi sum_G,Theta log(sum_k pi_k * p(x_n|G_k, Theta_k))
+    return expected_mixture_scores
 
 
 def posterior_predictive_SHD(*, key, q_pi, dists, g, n_mixing_mc_samples=100):
