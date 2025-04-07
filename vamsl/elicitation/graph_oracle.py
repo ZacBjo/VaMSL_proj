@@ -59,12 +59,11 @@ class graphOracle:
             reponse (int): a binary indicator for edge existence/absence. 
         """
         i, j = query[0], query[1]
-        
         if soft:
             m, s = reliability # unpack mean and std from sof reliability
             m = jnp.abs(m - 1 + self.graphs[component][i, j]) # invert mean depending on edge existence
-            get_alpha = lambda m, s: m * (((m * (1-m)) / s**2)-1)
-            get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2)-1)
+            get_alpha = lambda m, s: m * (((m * (1-m)) / s**2))
+            get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2))
             e_ij = random.beta(key=key, a=get_alpha(m,s), b=get_beta(m,s))
         else:
             # Get a uniform sample to determine correctness of response 
