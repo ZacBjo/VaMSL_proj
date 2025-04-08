@@ -567,19 +567,18 @@ class Test_elicitation:
         
         if isinstance(lamda, int):
             N = lamda
-            linear_concentration, schedule = True, t
+            linear_concentration, inv_t = True, 1
         elif len(lamda) == 2:
             N, concentration_function = lamda
             linear_concentration = True if concentration_function == 'linear' else False
-            schedule = t
+            inv_t = 1
         else:
             N, concentration_function, schedule = lamda
             linear_concentration = True if concentration_function == 'linear' else False
-        inv_t = jnp.max(jnp.array([schedule / (t+1), 1]))
+            inv_t = jnp.max(jnp.array([schedule+1 / (t+1), 1]))
         
-        
-        linear = lambda E, N: jnp.abs(E-0.5)*N # Linear function for concentration parameter
-        quadratic = lambda E, N:4*(N-1)*(E-0.5)**2 # Quadratic function for concentration parameter
+        linear = lambda E, N: 1 + 2*(jnp.abs(E-0.5)*(N-1)) # Linear function for concentration parameter
+        quadratic = lambda E, N: 1 + 4*(N-1)*(E-0.5)**2 # Quadratic function for concentration parameter
         concentrations = linear(E, N) if linear_concentration else quadratic(E, N)
         
         elicited_logliks = binom.logpmf(k = inv_t * concentrations * soft_G,
@@ -587,6 +586,9 @@ class Test_elicitation:
                                         p = E)
         
         #debug.print('soft_g: \n{x}',x=soft_G)
+        #debug.print('concentrations: \n{x}',x=inv_t * concentrations * (soft_G))
+        #debug.print('not concentrations: \n{x}',x=inv_t * concentrations * (1-soft_G))
+        #debug.print('inv_t: \n{x}',x=inv_t)
         #debug.print('lik: {x}',x=jnp.absolute(elicited_logliks.mean()))
         elicited_logpriors = beta.logpdf(E, a=prior_alphas, b=prior_betas)
         
