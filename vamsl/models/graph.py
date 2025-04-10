@@ -433,6 +433,88 @@ class ElicitationBernoulli:
         
         return elicited_logpost
     
+class ConcentratedElicitationBernoulli:
+    """
+    Elicted prior term based on elictied edge probabilities.  
+
+    :math:`p(Y \\mid G) \\propto p(G \\mid Y)p(Y)`
+
+    where :math:`p(G \\mid Y)` denotes elicitation likelihood
+    and :math:`p(Y)` denotes prior over expert edge beliefs.
+
+    Args:
+        n_vars (int): number of variables in DAG
+        n_edges_per_node (int): number of edges sampled per variable
+
+    """
+
+    def __init__(self):
+        pass
+
+    def joint_log_prob(self, *, G, E, lamda, t, alpha_e=1, beta_e=1):
+        """
+        Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
+
+        Args:
+            G (ndarray): graph adjacency matrix
+            E (ndarray): elcitied edge probabilities of shape
+            N (int): number of observations, scales the impact of expert beliefs on prior probs
+
+        Returns:
+            log joint probability corresponding to edge probabilities in :math:`G | E_soft`
+
+        """
+        alphas, betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
+        # Mask hard constraints as uniform to remove their influence (hard constraints are applied via p(G|Z,E))
+        E = jnp.where(E == 1.0,
+                      0.5,
+                      jnp.where(E == 0.0, 
+                                0.5,
+                                # [n_observations, n_vars]
+                                E
+                               )
+                     )
+        
+        if isinstance(lamda, int):
+            N = lamda
+            linear_concentration, inv_t = False, 1
+        elif len(lamda) == 2:
+            N, concentration_function = lamda
+            linear_concentration = True if concentration_function == 'linear' else False
+            inv_t = 1
+        else:
+            N, concentration_function, schedule = lamda
+            linear_concentration = True if concentration_function == 'linear' else False
+            inv_t = jnp.max(jnp.array([schedule+1 / (t+1), 1]))
+        
+        linear = lambda E, N: 1 + 2*(jnp.abs(E-0.5)*(N-1)) # Linear function for concentration parameter
+        quadratic = lambda E, N: 1 + 4*(N-1)*(E-0.5)**2 # Quadratic function for concentration parameter
+        concentrations = linear(E, N) if linear_concentration else quadratic(E, N)
+        
+        #jorge = lambda E: 1 + (E**(1/2) * (1-E)**(1/2))
+        #concentrations = jorge(E)
+        
+        # get bernoulli probs for edges and complement for absent edges 
+        elicited_logliks = jnp.where(G == 1,
+                                     concentrations * jnp.log(E),
+                                     jnp.where(G == 0,
+                                               concentrations*jnp.log((1-E)),
+                                               # [n_observations, n_vars]
+                                               jnp.zeros_like(E)
+                                              )
+                                    )
+        
+        elicited_logpriors = beta.logpdf(E, a=alphas, b=betas)
+        elicited_lognumerator = elicited_logliks+elicited_logpriors
+        logdenominator = betaln(alphas + G, betas + (1-G)) - betaln(alphas, betas)
+        
+        return jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator))
+        
+        # Remove probs from (un)elicited values, default at 0.5
+        elicited_logpost = jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator)) - jnp.sum(jnp.where(E == 0.5, 0, logdenominator))
+        
+        return elicited_logpost
+    
     
 class SoftGraphElicitationBeta:
     """
@@ -475,6 +557,8 @@ class SoftGraphElicitationBeta:
                                 E
                                )
                      )
+        
+        
         
         soft_G = jnp.where(soft_G == 1.0,
                       soft_G-10**-7,
