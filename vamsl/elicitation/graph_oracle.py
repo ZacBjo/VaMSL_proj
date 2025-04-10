@@ -60,11 +60,34 @@ class graphOracle:
         """
         i, j = query[0], query[1]
         if soft:
-            m, s = reliability # unpack mean and std from sof reliability
+            # unpack mean and std from sof reliability
+            if len(reliability) == 2:
+                m, s = reliability
+                r, a_r, b_r = 0, 1, 1
+            elif len(reliability) == 3:
+                m, s, r = reliability
+                a_r, b_r = 1, 1
+            else:
+                m, s, r, a_r, b_r = reliability
+                
             m = jnp.abs(m - 1 + self.graphs[component][i, j]) # invert mean depending on edge existence
             get_alpha = lambda m, s: m * (((m * (1-m)) / s**2))
             get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2))
-            e_ij = random.beta(key=key, a=get_alpha(m,s), b=get_beta(m,s))
+            key, subk = random.split(key)
+            beta_e_ij = random.beta(key=subk, a=get_alpha(m,s), b=get_beta(m,s))
+            key, subk = random.split(key)
+            if a_r == 1 and b_r == 1:
+                random_e_ij = random.uniform(key=subk, minval=0, maxval=1)
+            else:
+                random_e_ij = random.beta(key=subk, a=a_r, b=b_r)
+            
+            # Get a uniform sample to determine randomness of response 
+            u = random.uniform(key=key, minval=0, maxval=1)
+            # if sample is below random coef, return random answer
+            e_ij = cond(u >= r, 
+                        lambda i: beta_e_ij,
+                        lambda i: random_e_ij,
+                        True)
         else:
             # Get a uniform sample to determine correctness of response 
             u = random.uniform(key=key, minval=0, maxval=1)
