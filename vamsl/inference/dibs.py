@@ -10,7 +10,7 @@ jax.config.update("jax_debug_nans", True)
 
 from vamsl.graph_utils import acyclic_constr_nograd
 from vamsl.utils.func import expand_by, zero_diagonal
-from vamsl.models.graph import ElicitationBernoulli, SoftGraphElicitationBeta, Test_elicitation
+from vamsl.models.graph import ElicitationBernoulli, ConcentratedElicitationBernoulli, SoftGraphElicitationBeta, Test_elicitation
 
 
 class MixtureDiBS:
@@ -576,7 +576,10 @@ class MixtureDiBS:
         Returns:
             grad of shape ``[1,]``
         """
-        f = ElicitationBernoulli().joint_log_prob(G=G, E=E_k)
+        if self.elicitation_prior == 'conc_hard':
+            f = ConcentratedElicitationBernoulli().joint_log_prob(G=G, E=E_k, lamda=self.lamda, t=t)
+        else:
+            f = ElicitationBernoulli().joint_log_prob(G=G, E=E_k)
         
         particle_grad = grad(self.latent_log_prob, 1)(G, single_z, E_k, t)
 
@@ -693,7 +696,7 @@ class MixtureDiBS:
         # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
         eltwise_grad_constraint = vmap(self.grad_constraint_gumbel, (0, 0, None, None), 0)(zs, subkeys, t, E_k)
         
-        # eliciation prior term
+        # elicitation prior term
         if self.elicitation_prior is None:
             grad_elicitation_prior_z = jnp.zeros_like(grad_prior_z)
         elif self.elicitation_prior == 'hard':
@@ -701,8 +704,13 @@ class MixtureDiBS:
             key, *batch_subk = random.split(subkeys[0], zs.shape[0] + 1)
             # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
             grad_elicitation_prior_z = self.lamda * vmap(self.grad_elicitation, (0, 0, None, None), 0)(zs, jnp.array(batch_subk), t, E_k)
+        elif self.elicitation_prior == 'conc_hard':
+            # Elicitation prior term based on sampling hard graphs from Z particles
+            key, *batch_subk = random.split(subkeys[0], zs.shape[0] + 1)
+            # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
+            grad_elicitation_prior_z = vmap(self.grad_elicitation, (0, 0, None, None), 0)(zs, jnp.array(batch_subk), t, E_k)
         elif self.elicitation_prior == 'soft':
-            # Eliciation term based on soft graph G(Z)
+            # Elicitation term based on soft graph G(Z)
             # [d, k, 2], [1,] -> [d, k, 2]
             grad_log_soft_graph_elicitation_prior_particle = grad(self.log_soft_graph_elicitation_prior_particle, 0)
             # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
@@ -713,12 +721,12 @@ class MixtureDiBS:
             # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
             grad_elicitation_prior_z = vmap(grad_log_soft_graph_elicitation_prior_particle, (0, None, None), 0)(zs, t, E_k)
         
-    #debug.print('h(x):     {x}',x= jnp.absolute(eltwise_grad_constraint).mean())
+        #debug.print('h(x):     {x}',x= jnp.absolute(eltwise_grad_constraint).mean())
         #debug.print('b * h(x): {x}',x= jnp.absolute(self.beta(t) * eltwise_grad_constraint).mean())
         #debug.print('numerics: {x}',x=jnp.absolute(zs / (self.latent_prior_std ** 2.0)).mean())
         #debug.print('rand. G:  {x}',x=jnp.absolute(grad_prior_z).mean())
         #debug.print('elicit.:  {x}',x=jnp.absolute(eltwise_grad_elicitation).mean())
-        #debug.print('elicit. soft:  {x}',x=jnp.absolute(grad_elicitation_prior_z.mean()))
+        #debug.print('elicit. :  {x}',x=jnp.absolute(grad_elicitation_prior_z.mean()))
         #debug.print('elicit. soft max:  {x}',x=jnp.max(grad_elicitation_prior_z))
         #debug.print('-------------------------------------------')
         

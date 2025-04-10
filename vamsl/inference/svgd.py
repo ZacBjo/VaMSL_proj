@@ -181,7 +181,6 @@ class MixtureJointDiBS(MixtureDiBS):
         
         # sample particles for all components
         key, *batch_subk = random.split(key, n_components+1)
-
         if linear:
             q_z, q_theta = vmap(self._sample_initial_random_particles, (0, None, None), 0)(jnp.array(batch_subk),
                                                                                            n_particles,
