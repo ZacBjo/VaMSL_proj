@@ -738,7 +738,7 @@ class MixtureDiBS:
             # Elicitation prior term based on sampling hard graphs from Z particles
             key, *batch_subk = random.split(subkeys[0], zs.shape[0] + 1)
             # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
-            grad_elicitation_prior_z = vmap(self.grad_elicitation, (0, 0, None, None), 0)(zs, jnp.array(batch_subk), t, E_k)
+            grad_elicitation_prior_z = vmap(self.grad_elicitation, (0, 0, None, 0), 0)(zs, jnp.array(batch_subk), t, E_k_stack)
             #grad_elicitation_prior_z = jnp.max(jnp.array([self.lamda[2]-t, 1])) * grad_elicitation_prior_z
             
         elif self.elicitation_prior == 'soft':
