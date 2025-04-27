@@ -324,7 +324,7 @@ def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
 
 
 def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, struct_eq_type, edges_per_node=2,
-                       obs_noise=0.1, mean_edge=0.0, sig_edge=1.0, min_edge=0.5, sig_param=1.0, hidden_layers=(5,)):
+                       obs_noise=0.1, mean_edge=0.0, sig_edge=1.0, min_edge=0.5, sig_param=1.0, hidden_layers=(5,5)):
     """
     Generate data for one experiment run. Data is generated from n_components number of randomly generated graphs. 
     The data is stacked and then shuffled.
