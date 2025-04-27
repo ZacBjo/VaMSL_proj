@@ -49,6 +49,41 @@ def visualize_ground_truths(mats, size=4.0, columns=7,graph_label='Ground truth 
     return
 
 
+def visualize_elicitation(mats, size=4.0, columns=7, component=None, order=None):
+    """    
+    `mats`: ndarray of shape (n_ground_truths, d, d) 
+    """
+    assert len(mats) >= 3, 'Need to specify: ground truth graph, particle(s) and eliciation matrix.'
+    cols = min(len(mats), columns)
+    rows = 1 + ((len(mats)-1)//cols)
+    plt.rcParams['figure.figsize'] = [cols*size, rows*size]
+    fig, axs = plt.subplots(rows, cols)
+    axs = axs.reshape((-1, cols))
+    [axs[i,j].set_axis_off() for i in range(rows) for j in range(cols)]
+    for n, mat in enumerate(mats):
+        i,j = n//cols, n%cols
+        axs[i,j].set_axis_on()
+        im = axs[i,j].matshow(mat, vmin=0, vmax=1)
+        plt.setp(axs[i,j].get_xticklabels(), visible=False)
+        plt.setp(axs[i,j].get_yticklabels(), visible=False)
+        axs[i,j].tick_params(axis='both', which='both', length=0)
+        if n == 0:
+            if order is None:
+                axs[i,j].set_title(f'Ground truth graph', pad=10)
+            else:
+                component = 0 if component is None else component
+                axs[i,j].set_title(f'Ground truth graph {order[component]+1}', pad=10)
+        elif n == len(mats)-1:
+            axs[i,j].set_title(f'Elicited responses', pad=10)
+        else:
+            axs[i,j].set_title(f'Particle {n}', pad=10)
+    
+    fig.suptitle(f'Elicitation for component {component+1}', size='xx-large')
+    fig.colorbar(im, ax=axs.ravel().tolist(), shrink=0.7)
+    plt.show()
+    return
+
+
 def visualize(mats, t, save_path=None, n_cols=7, size=2.5, show=False):
     """
     Based on visualization by https://github.com/JannerM/gamma-models/blob/main/gamma/visualization/pendulum.py
