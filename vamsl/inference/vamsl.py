@@ -111,14 +111,15 @@ class VaMSL(MixtureJointDiBS):
         )
         
     
-    def sample_E_particles(self, *, key):
+    def sample_E_particles(self, *, key=None):
         E_particles = jnp.stack([jnp.repeat(self.E[k, np.newaxis, :, :], self.n_particles, axis=0) for k in range(self.q_z.shape[0])])
         for k in range(self.q_z.shape[0]):
             for p in range(self.n_particles):
                 E_k = E_particles[k,p,:,:]
                 if self.stochastic_elicitation:
+                    probs = jnp.where(E_k > 0.5, E_k, 1-E_k)
                     key, subk = random.split(key)
-                    trials = random.bernoulli(subk, p=E_k, shape=E_k.shape)
+                    trials = random.bernoulli(subk, p=probs, shape=E_k.shape)
                 else:
                     trials = jnp.ones_like(E_k)
                 E_particles = E_particles.at[k,p,:,:].set(jnp.where(trials, E_k, 0.5))
@@ -421,6 +422,8 @@ class VaMSL(MixtureJointDiBS):
         """ 
         self.E = E
         if not key is None:
+            self.E_particles = self.sample_E_particles(key=key)
+        elif not self.stochastic_elicitation:
             self.E_particles = self.sample_E_particles(key=key)
 
     
