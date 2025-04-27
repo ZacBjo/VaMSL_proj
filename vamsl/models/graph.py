@@ -5,7 +5,7 @@ from jax import random
 from jax import vmap
 from jax.scipy.stats import dirichlet, beta
 from jax.scipy.special import betaln
-from jax.scipy.stats import binom
+from jax.scipy.stats import binom, norm
 
 from vamsl.graph_utils import mat_to_graph, graph_to_mat, mat_is_dag
 from vamsl.utils.func import zero_diagonal
@@ -325,10 +325,10 @@ class DirichletSimilarity:
                      )
         
         # Add noise to probabilities representing certanties for numeric stability 
-        soft_g = jnp.where(soft_g == 1.0,
-                           1.0-10**-10,
-                           jnp.where(soft_g == 0.0,
-                                     10**-10,
+        soft_g = jnp.where(soft_g > 0.99,
+                           0.99,
+                           jnp.where(soft_g < 0.01,
+                                     0.01,
                                      # [n_observations, n_vars]
                                      soft_g
                                     )
@@ -340,12 +340,13 @@ class DirichletSimilarity:
         S = 1 + 4*(30-1)*(E-0.5)**2
         S = 10*jnp.ones_like(E)
         
-        # Calculate logpdf of predicting elicited belief given soft graph
-        #beta_logpdf = lambda g_ij, e_ij, s_ij: beta.logpdf(x=g_ij, a=s_ij*(0.5+e_ij), b=s_ij*(0.5+(1-e_ij)))
-        
-        # joint log prob of all edges in soft graph 
-        #logjoint = vmap(lambda g_i, e_i, s_i: vmap(beta_logpdf, (0,0, 0))(g_i, e_i, s_i), (0, 0, 0))(soft_g, E, S)
-        
+        #get_alpha = lambda m, s: - m * ((s**2 + m**2 - m) / s**2)
+        get_alpha = lambda m, s: (m**2 *(1-m)) / s**2
+        #get_alpha = lambda m, s: m * (((m * (1-m)) / s**2)-1)
+        #get_beta = lambda m, s: ((s**2+m**2-m)*(m-1))/s**2
+        get_beta = lambda m, s: (m * (1-m)**2) / s**2
+        #get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2)-1)
+
         # Calculate logpdf of predicting elicited belief given soft graph
         # joint log prob of all edges in soft graph 
         logjoint = jnp.where(E-0.5 > 0,
@@ -353,7 +354,9 @@ class DirichletSimilarity:
                              beta.logpdf(x=soft_g, a=1, b=(1+S*(0.5-E)))
                             )
         
-        
+        logjoint = zero_diagonal(beta.logpdf(x=E, a=get_alpha(soft_g, 0.1), b=get_beta(soft_g, 0.1)))
+        #logjoint_sanity = beta.logpdf(x=E, a=get_alpha(soft_g, 0.1), b=get_beta(soft_g, 0.1))
+
         # Remove influence of uniform beliefs and return log joint 
         return jnp.sum(
                     jnp.where(
@@ -364,10 +367,6 @@ class DirichletSimilarity:
                         logjoint
                     )
                 )
-        
-        logjoint = beta.logpdf(x=soft_g, a=E, b=1-E)
-        
-        return jnp.sum(logjoint)
     
     
 class ElicitationBernoulli:
@@ -388,7 +387,7 @@ class ElicitationBernoulli:
     def __init__(self):
         pass
 
-    def joint_log_prob(self, *, G, E, alpha_e=1, beta_e=1):
+    def joint_log_prob(self, *, G, E, alpha_e=2, beta_e=2):
         """
         Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
 
@@ -412,7 +411,7 @@ class ElicitationBernoulli:
                                )
                      )
         
-        # get bernoulli probs for edges and complement for absent edges 
+        # get Bernoulli probs for edges and complement for absent edges 
         elicited_logliks = jnp.where(G == 1,
                                      jnp.log(E),
                                      jnp.where(G == 0,
@@ -422,16 +421,30 @@ class ElicitationBernoulli:
                                               )
                                     )
         
+        #get_alpha = lambda m, s: - m * ((s**2 + m**2 - m) / s**2)
+        get_alpha = lambda m, s: (m**2 *(1-m)) / s**2
+        #get_alpha = lambda m, s: m * (((m * (1-m)) / s**2)-1)
+        #get_beta = lambda m, s: ((s**2+m**2-m)*(m-1))/s**2
+        get_beta = lambda m, s: (m * (1-m)**2) / s**2
+        #get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2)-1)
+        
+        quadratic = lambda E: norm.pdf(E, loc=0.5, scale=0.15) / 10
+        alphas = get_alpha(m=E, s=0.01)#quadratic(E))
+        betas = get_beta(m=E, s=0.01)#quadratic(E))
+        
+        
         elicited_logpriors = beta.logpdf(E, a=alphas, b=betas)
-        elicited_lognumerator = elicited_logliks+elicited_logpriors
+        elicited_lognumerator = elicited_logliks + elicited_logpriors
+        
         logdenominator = betaln(alphas + G, betas + (1-G)) - betaln(alphas, betas)
         
-        return jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator))
+        #return jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator))
         
         # Remove probs from (un)elicited values, default at 0.5
         elicited_logpost = jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator)) - jnp.sum(jnp.where(E == 0.5, 0, logdenominator))
         
         return elicited_logpost
+    
     
 class ConcentratedElicitationBernoulli:
     """
@@ -451,7 +464,7 @@ class ConcentratedElicitationBernoulli:
     def __init__(self):
         pass
 
-    def joint_log_prob(self, *, G, E, lamda, t, alpha_e=1, beta_e=1):
+    def joint_log_prob(self, *, G, E, lamda, t, alpha_e=100, beta_e=100):
         """
         Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
 
@@ -476,44 +489,37 @@ class ConcentratedElicitationBernoulli:
                      )
         
         if isinstance(lamda, int):
-            N = lamda
-            linear_concentration, inv_t = False, 1
+            schedule = lamda
+            prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
+            inv_t = jnp.max(jnp.array([schedule-t, 1]))
         elif len(lamda) == 2:
-            N, concentration_function = lamda
-            linear_concentration = True if concentration_function == 'linear' else False
+            alpha_e, beta_e = lamda
+            prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
             inv_t = 1
         else:
-            N, concentration_function, schedule = lamda
-            linear_concentration = True if concentration_function == 'linear' else False
-            inv_t = jnp.max(jnp.array([schedule+1 / (t+1), 1]))
+            alpha_e, beta_e, schedule = lamda
+            prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
+            inv_t = jnp.max(jnp.array([schedule-t, 1]))
         
-        linear = lambda E, N: 1 + 2*(jnp.abs(E-0.5)*(N-1)) # Linear function for concentration parameter
-        quadratic = lambda E, N: 1 + 4*(N-1)*(E-0.5)**2 # Quadratic function for concentration parameter
-        concentrations = linear(E, N) if linear_concentration else quadratic(E, N)
-        
-        #jorge = lambda E: 1 + (E**(1/2) * (1-E)**(1/2))
-        #concentrations = jorge(E)
+        concentrations = jnp.where(E > 0.5, 
+                                   ((E*(alpha_e + beta_e) - alpha_e) / (1-E)),
+                                   jnp.where(E < 0.5, 
+                                             ((alpha_e - E*(alpha_e + beta_e)) / (E)), 
+                                             0)
+                                   )
         
         # get bernoulli probs for edges and complement for absent edges 
         elicited_logliks = jnp.where(G == 1,
-                                     concentrations * jnp.log(E),
+                                     inv_t * concentrations * jnp.log(E),
                                      jnp.where(G == 0,
-                                               concentrations*jnp.log((1-E)),
+                                               inv_t * concentrations * jnp.log((1-E)),
                                                # [n_observations, n_vars]
                                                jnp.zeros_like(E)
                                               )
                                     )
         
-        elicited_logpriors = beta.logpdf(E, a=alphas, b=betas)
-        elicited_lognumerator = elicited_logliks+elicited_logpriors
-        logdenominator = betaln(alphas + G, betas + (1-G)) - betaln(alphas, betas)
-        
-        return jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator))
-        
-        # Remove probs from (un)elicited values, default at 0.5
-        elicited_logpost = jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator)) - jnp.sum(jnp.where(E == 0.5, 0, logdenominator))
-        
-        return elicited_logpost
+        return jnp.sum(zero_diagonal(jnp.where(E == 0.5, 0, elicited_logliks)))
+    
     
     
 class SoftGraphElicitationBeta:
@@ -596,7 +602,7 @@ class SoftGraphElicitationBeta:
         return elicited_unnorm_logpost
     
     
-class Test_elicitation:
+class ElicitationBinomial:
     """
     Elicted prior term based on elictied edge probabilities.  
 
@@ -614,20 +620,19 @@ class Test_elicitation:
     def __init__(self):
         pass
 
-    def joint_unnorm_log_prob(self, *, soft_G, E, lamda=1, t=1, alpha_e=1, beta_e=1, std_e_lik=0.1):
+    def joint_unnorm_log_prob(self, *, soft_G, E, lamda=1, t=1, alpha_e=1.01, beta_e=1.01):
         """
-        Computes :math:`\\log p(G|E_soft)` where :math:`G` is the matrix of edge probabilities
+        Computes :math:`\\log p(D_G|G(Z))` where :math:`G(Z)` is a matrix of edge probabilities
 
         Args:
-            G (ndarray): graph adjacency matrix
+            soft_G (ndarray): graph adjacency matrix
             E (ndarray): elcitied edge probabilities of shape
             N (int): number of observations, scales the impact of expert beliefs on prior probs
 
         Returns:
-            log joint probability corresponding to edge probabilities in :math:`G | E_soft`
+            log joint probability corresponding to edge probabilities in :math:`D_G | G(Z)`
 
         """
-        prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
         # Mask hard constraints as uniform to remove their influence (hard constraints are applied via p(G|Z,E))
         E = jnp.where(E == 1.0,
                       0.5,
@@ -648,40 +653,35 @@ class Test_elicitation:
                                )
                      )
         
-        
         if isinstance(lamda, int):
-            N = lamda
-            linear_concentration, inv_t = True, 1
+            schedule = lamda
+            prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
+            inv_t = jnp.max(jnp.array([(schedule-t) / (t+1), 1]))
         elif len(lamda) == 2:
-            N, concentration_function = lamda
-            linear_concentration = True if concentration_function == 'linear' else False
+            alpha_e, beta_e = lamda
+            prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
             inv_t = 1
         else:
-            N, concentration_function, schedule = lamda
-            linear_concentration = True if concentration_function == 'linear' else False
-            inv_t = jnp.max(jnp.array([schedule+1 / (t+1), 1]))
+            alpha_e, beta_e, schedule = lamda
+            prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
+            inv_t = jnp.max(jnp.array([schedule-t, 1]))
         
-        linear = lambda E, N: 1 + 2*(jnp.abs(E-0.5)*(N-1)) # Linear function for concentration parameter
-        quadratic = lambda E, N: 1 + 4*(N-1)*(E-0.5)**2 # Quadratic function for concentration parameter
-        concentrations = linear(E, N) if linear_concentration else quadratic(E, N)
+        k = jnp.where(E > 0.5,
+                      inv_t * ((E*(alpha_e + beta_e) - alpha_e) / (1-E)),
+                      jnp.where(E < 0.5,
+                                0,#alpha_e,
+                                0)
+                       )
         
-        elicited_logliks = binom.logpmf(k = inv_t * concentrations * soft_G,
-                                        n = inv_t * concentrations * (1-soft_G),
-                                        p = E)
+        n = jnp.where(E > 0.5,
+                      k,# + beta_e,
+                      jnp.where(E < 0.5, 
+                                inv_t * ((alpha_e - E*(alpha_e + beta_e)) / (E)),# + k, 
+                                0)
+                       )
         
-        #debug.print('soft_g: \n{x}',x=soft_G)
-        #debug.print('concentrations: \n{x}',x=inv_t * concentrations * (soft_G))
-        #debug.print('not concentrations: \n{x}',x=inv_t * concentrations * (1-soft_G))
-        #debug.print('inv_t: \n{x}',x=inv_t)
-        #debug.print('lik: {x}',x=jnp.absolute(elicited_logliks.mean()))
-        elicited_logpriors = beta.logpdf(E, a=prior_alphas, b=prior_betas)
-        
-        #debug.print('Prio: {x}',x=jnp.absolute(elicited_logpriors.mean()))
-        elicited_lognumerator = elicited_logliks+elicited_logpriors
-        #debug.print('num: {x}',x=jnp.absolute(elicited_lognumerator.mean()))
-        
-        # Remove probs from (un)elicited values, default at 0.5
-        elicited_unnorm_logpost = jnp.sum(jnp.where(E == 0.5, 0, elicited_lognumerator))
-        #debug.print('logpost: {x}',x=elicited_unnorm_logpost)
-        
-        return elicited_unnorm_logpost
+        elicited_logliks = binom.logpmf(k = k,
+                                        n = n,
+                                        p = soft_G)
+
+        return jnp.sum(zero_diagonal(jnp.where(E == 0.5, 0, elicited_logliks)))
