@@ -49,7 +49,7 @@ def visualize_ground_truths(mats, size=4.0, columns=7,graph_label='Ground truth 
     return
 
 
-def visualize_elicitation(mats, size=4.0, columns=7, component=None, order=None):
+def visualize_elicitation(mats, size=4.0, columns=9, component=None, order=None):
     """    
     `mats`: ndarray of shape (n_ground_truths, d, d) 
     """
