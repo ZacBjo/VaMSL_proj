@@ -33,6 +33,7 @@ class VaMSL(MixtureJointDiBS):
                  alphas = None,
                  sf_baselines = None,
                  E = None,
+                 E_particles=None,
                  n_particles = None,
                  graph_model,
                  elicitation_graph_model=DirichletSimilarity(),
@@ -52,9 +53,11 @@ class VaMSL(MixtureJointDiBS):
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
                  n_elicitation_grad_mc_samples=1,
+                 stochastic_elicitation=False,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
                  latent_prior_std=None,
+                 parallell_computation=True,
                  verbose=False):
         self.q_z = q_z
         self.q_theta = q_theta
@@ -62,6 +65,8 @@ class VaMSL(MixtureJointDiBS):
         self.q_pi = q_pi
         self.alphas = alphas
         self.E = E
+        self.E_particles=E_particles
+        self.stochastic_elicitation = stochastic_elicitation
         self.n_particles = n_particles
         self.sf_baselines = sf_baselines
 
@@ -101,11 +106,27 @@ class VaMSL(MixtureJointDiBS):
             grad_estimator_z=grad_estimator_z,
             score_function_baseline=score_function_baseline,
             latent_prior_std=latent_prior_std,
+            parallell_computation=parallell_computation,
             verbose=verbose
         )
         
+    
+    def sample_E_particles(self, *, key):
+        E_particles = jnp.stack([jnp.repeat(self.E[k, np.newaxis, :, :], self.n_particles, axis=0) for k in range(self.q_z.shape[0])])
+        for k in range(self.q_z.shape[0]):
+            for p in range(self.n_particles):
+                E_k = E_particles[k,p,:,:]
+                if self.stochastic_elicitation:
+                    key, subk = random.split(key)
+                    trials = random.bernoulli(subk, p=E_k, shape=E_k.shape)
+                else:
+                    trials = jnp.ones_like(E_k)
+                E_particles = E_particles.at[k,p,:,:].set(jnp.where(trials, E_k, 0.5))
+                    
+        return E_particles
         
-    def initialize_posteriors(self, *, key, n_components, n_particles, init_q_c=None, alphas=None, E=None, linear=True):
+        
+    def initialize_posteriors(self, *, key, n_components, n_particles, init_q_c=None, alphas=None, E=None, E_particles=None, linear=True):
         """
         Initializes variational posteriors for mixing weights q(\pi) and embbedded graph and parameter 
         particles q(Z, \Theta).
@@ -144,7 +165,8 @@ class VaMSL(MixtureJointDiBS):
             self.alphas = alphas
             
         # Sample initial emmbedded graph and paramter particles 
-        self.q_z, self.q_theta = self._sample_intial_component_particles(key=key,
+        key, subk = random.split(key)
+        self.q_z, self.q_theta = self._sample_intial_component_particles(key=subk,
                                                                          n_components=n_components, 
                                                                          n_particles=self.n_particles,
                                                                          n_dim=self.n_vars,
@@ -155,7 +177,10 @@ class VaMSL(MixtureJointDiBS):
         if E is None:
             self.E = 0.5*jnp.ones((n_components, self.n_vars, self.n_vars))
         else:
-            self.E = E 
+            self.E = E
+        
+        if E_particles is None:
+            self.E_particles = self.sample_E_particles(key=key)
 
             
     def get_component_dists(self, empirical=True):
@@ -246,6 +271,7 @@ class VaMSL(MixtureJointDiBS):
                                                                 init_q_theta=self.q_theta, 
                                                                 init_sf_baselines=self.sf_baselines,
                                                                 E=self.E,
+                                                                E_stack=self.E_particles,
                                                                 linear=linear)
 
     
@@ -382,7 +408,7 @@ class VaMSL(MixtureJointDiBS):
         return self.q_z, self.q_theta, self.log_q_c, self.q_pi
 
     
-    def set_E(self, E):
+    def set_E(self, E, key=None):
         """
         Sets elicitation matrix.
 
@@ -394,6 +420,8 @@ class VaMSL(MixtureJointDiBS):
 
         """ 
         self.E = E
+        if not key is None:
+            self.E_particles = self.sample_E_particles(key=key)
 
     
     def get_E(self):
@@ -408,6 +436,10 @@ class VaMSL(MixtureJointDiBS):
 
         """
         return self.E
+    
+    
+    def get_E_particles(self):
+        return self.E_particles
     
     
     def set_lamda(self, lamda):
@@ -577,7 +609,7 @@ class VaMSL(MixtureJointDiBS):
                      zs=self.q_z[k],
                      thetas=self.q_theta[k],
                      E_k=self.E[k],
-                     ipython=True if k < n_components-1 else False)
+                     ipython=True if k < self.n_components-1 else False)
     
     
     def component_classification_accuracy(self, *, component, c_k_targets):

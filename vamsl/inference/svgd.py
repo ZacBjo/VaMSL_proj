@@ -85,6 +85,7 @@ class MixtureJointDiBS(MixtureDiBS):
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
                  latent_prior_std=None,
+                 parallell_computation=True,
                  verbose=False):
 
         # handle mutable default args
@@ -121,6 +122,7 @@ class MixtureJointDiBS(MixtureDiBS):
         self.likelihood_model = likelihood_model
         self.graph_model = graph_model
         self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
+        self.parallell_computation = parallell_computation
         
         # functions for post-hoc likelihood evaluations
         #self.eltwise_log_likelihood_observ = vmap(lambda g, theta, x_ho:
@@ -350,7 +352,7 @@ class MixtureJointDiBS(MixtureDiBS):
         return vmap(self._theta_update, (0, 0, 1, None, None, None), 0)(*args)
 
 
-    def _svgd_step(self, t, c, opt_state_z, opt_state_theta, key, sf_baseline, E_k):
+    def _svgd_step(self, t, c, opt_state_z, opt_state_theta, key, sf_baseline, E_k, E_k_stack):
         """
         Performs a single SVGD step in the DiBS framework, updating all :math:`(Z, \\Theta)` particles jointly.
 
@@ -370,20 +372,19 @@ class MixtureJointDiBS(MixtureDiBS):
         z = self.get_params(opt_state_z)  # [n_particles, d, k, 2]
         theta = self.get_params(opt_state_theta)  # PyTree with `n_particles` leading dim
         n_particles = z.shape[0]
-
+        
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
         if isinstance(theta, jax.Array):
             dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
             dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
         else:
-            # If theta is PyTree, MC averaging needs to be handled through flattening
+            # If theta is PyTree, MC averaging needs to be handled through flattening and rebuilding PyTree
             dtheta_log_prob_mc_samples = [self.eltwise_grad_theta_likelihood(self.x, c_s, z, theta, t, jnp.array(batch_subk), E_k) for c_s in c]
             treedef = jax.tree_util.tree_structure(dtheta_log_prob_mc_samples[0])
             sample_vals = [ret[0] for ret in [jax.tree_util.tree_flatten(sample) for sample in dtheta_log_prob_mc_samples]]
             sample_vals_mean = [jnp.array([s[i] for s in sample_vals]).mean(axis=0) for i in range(len(sample_vals[0]))]
             dtheta_log_prob = jax.tree_util.tree_unflatten(treedef, sample_vals_mean)
-            #dtheta_log_prob= dtheta_log_prob_mc_samples[0]
             
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
@@ -392,8 +393,8 @@ class MixtureJointDiBS(MixtureDiBS):
         
         # d/dz log p(z) (acyclicity)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k, c)
-
+        dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k, c, E_k_stack)
+        
         # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood
         
@@ -409,7 +410,7 @@ class MixtureJointDiBS(MixtureDiBS):
         opt_state_z = self.opt_update(t, phi_z, opt_state_z)
         opt_state_theta = self.opt_update(t, phi_theta, opt_state_theta)
 
-        return c, opt_state_z, opt_state_theta, key, sf_baseline, E_k
+        return c, opt_state_z, opt_state_theta, key, sf_baseline, E_k, E_k_stack
 
 
     # this is the crucial @jit
@@ -418,7 +419,7 @@ class MixtureJointDiBS(MixtureDiBS):
         return jax.lax.fori_loop(start, start + n_steps, lambda i, args: self._svgd_step(i, *args), init)
 
 
-    def _sample_component(self, t, steps, key, c, init_z, init_theta, sf_baseline, E_k):
+    def _sample_component(self, t, steps, key, c, init_z, init_theta, sf_baseline, E_k, E_k_stack):
         """
         Use SVGD with DiBS to sample ``n_particles`` particles :math:`(G, \\Theta)` from the joint posterior 
         of one component :math:`p(G, \\Theta | D)` as defined by the BN model ``self.likelihood_model``
@@ -448,13 +449,14 @@ class MixtureJointDiBS(MixtureDiBS):
         
         """Execute particle update steps for all particles in parallel using `vmap` functions"""
         # faster if for-loop is functionally pure and compiled, so only interrupt for callback
-        c, opt_state_z, opt_state_theta, key, sf_baseline, E_k = self._svgd_loop(t, steps,
+        c, opt_state_z, opt_state_theta, key, sf_baseline, E_k, E_k_stack = self._svgd_loop(t, steps,
                                                                                 (c, 
                                                                                  opt_state_z,
                                                                                  opt_state_theta,
                                                                                  key,
                                                                                  sf_baseline,
-                                                                                 E_k))
+                                                                                 E_k, 
+                                                                                 E_k_stack))
         
         # retrieve transported particles
         z_final = jax.device_get(self.get_params(opt_state_z))
@@ -464,14 +466,15 @@ class MixtureJointDiBS(MixtureDiBS):
     
 
     # Update SVGD approximations across components
-    def _compwise_sample_component(self, t, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, linear=True):
-        if linear:
-            return vmap(self._sample_component, (None, None, 0, 0, 0, 0, 0, 0))(t, steps, subkeys, cs, q_z, 
-                                                                                q_theta, sf_baselines, E)
+    def _compwise_sample_component(self, t, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, E_stack, linear=True):
+        # Vectorized mapping over components only if linear Gaussian and enabled
+        if linear and self.parallell_computation:
+            return vmap(self._sample_component, (None, None, 0, 0, 0, 0, 0, 0, 0))(t, steps, subkeys, cs, q_z, 
+                                                                                q_theta, sf_baselines, E, E_stack)
         else:
             # non-linear parameters don't support vectorized mapping, replace with inbuilt map
             ts, steps = q_z.shape[0]*[t], q_z.shape[0]*[steps]
-            q_z_theta_baselines = [q for q in map(self._sample_component, ts, steps, subkeys, cs, q_z, q_theta, sf_baselines, E)]
+            q_z_theta_baselines = [q for q in map(self._sample_component, ts, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, E_stack)]
             # Unpack results
             q_z = jnp.stack([q_z_theta_baselines[k][0] for k in range(q_z.shape[0])], axis=0)
             q_theta = [q_z_theta_baselines[k][1] for k in range(q_z.shape[0])]
@@ -481,7 +484,7 @@ class MixtureJointDiBS(MixtureDiBS):
     
     
     def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None,
-               cs, init_q_z, init_q_theta, init_sf_baselines, E, linear=True):
+               cs, init_q_z, init_q_theta, init_sf_baselines, E, E_stack, linear=True):
         """
         Use SVGD with VaMSL to sample ``[n_components, n_particles]`` particles.
 
@@ -516,7 +519,8 @@ class MixtureJointDiBS(MixtureDiBS):
                                                                          q_z=q_z, 
                                                                          q_theta=q_theta,
                                                                          sf_baselines=sf_baselines,
-                                                                         E=E,
+                                                                         E=E, 
+                                                                         E_stack=E_stack,
                                                                          linear=linear)
             
             if callback:
