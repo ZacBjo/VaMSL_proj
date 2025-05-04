@@ -184,7 +184,7 @@ class VaMSL(MixtureJointDiBS):
             self.E_particles = self.sample_E_particles(key=key)
 
             
-    def get_component_dists(self, empirical=True):
+    def get_component_dists(self, empirical=True, key=None):
         """
         Get particle distributions for components. Either get empirical dist. or mixture dist. as 
         detailed in original DiBS article. 
@@ -206,7 +206,8 @@ class VaMSL(MixtureJointDiBS):
         if empirical:
             component_dists = [self.get_empirical(component_gs[k], self.q_theta[k]) for k in range(K)]
         else:
-            component_dists = [self.get_mixture(component_gs[k], self.q_theta[k]) for k in range(K)]
+            cs = self.sample_assignments(key)
+            component_dists = [self.get_mixture(component_gs[k], self.q_theta[k], cs[k]) for k in range(K)]
         
         return component_dists
     
