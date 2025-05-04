@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from jax import random
 from jax import vmap
 from jax.scipy.stats import dirichlet, beta
-from jax.scipy.special import betaln
+from jax.scipy.special import betaln, xlogy, xlog1py
 from jax.scipy.stats import binom, norm
 
 from vamsl.graph_utils import mat_to_graph, graph_to_mat, mat_is_dag
@@ -502,9 +502,9 @@ class ConcentratedElicitationBernoulli:
             inv_t = jnp.max(jnp.array([schedule-t, 1]))
         
         concentrations = jnp.where(E > 0.5, 
-                                   ((E*(alpha_e + beta_e) - alpha_e) / (1-E)),
+                                   ((E*(alpha_e + beta_e - 2) - alpha_e + 1) / (1-E)),
                                    jnp.where(E < 0.5, 
-                                             ((alpha_e - E*(alpha_e + beta_e)) / (E)), 
+                                             ((alpha_e - 1 - E*(alpha_e + beta_e - 2)) / (E)), 
                                              0)
                                    )
         
@@ -620,7 +620,7 @@ class ElicitationBinomial:
     def __init__(self):
         pass
 
-    def joint_unnorm_log_prob(self, *, soft_G, E, lamda=1, t=1, alpha_e=1.01, beta_e=1.01):
+    def joint_unnorm_log_prob(self, *, soft_G, E, lamda=1, t=1, alpha_e=1.01, beta_e=1.01, floor=True):
         """
         Computes :math:`\\log p(D_G|G(Z))` where :math:`G(Z)` is a matrix of edge probabilities
 
@@ -666,22 +666,30 @@ class ElicitationBinomial:
             prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
             inv_t = jnp.max(jnp.array([schedule-t, 1]))
         
+        k_temp = inv_t * ((E*(alpha_e + beta_e - 2) - alpha_e + 1) / (1-E))
         k = jnp.where(E > 0.5,
-                      inv_t * ((E*(alpha_e + beta_e) - alpha_e) / (1-E)),
+                      jnp.floor(k_temp) if floor else k_temp,
                       jnp.where(E < 0.5,
-                                0,#alpha_e,
+                                0,
                                 0)
                        )
         
+        n_temp = inv_t * ((alpha_e - 1 - E*(alpha_e + beta_e - 2)) / (E))
         n = jnp.where(E > 0.5,
-                      k,# + beta_e,
+                      k,
                       jnp.where(E < 0.5, 
-                                inv_t * ((alpha_e - E*(alpha_e + beta_e)) / (E)),# + k, 
+                                jnp.floor(n_temp) if floor else n_temp, 
                                 0)
                        )
         
+        # Expert has only conditioned on "whole" observations 
         elicited_logliks = binom.logpmf(k = k,
                                         n = n,
                                         p = soft_G)
+        
+        # Binomial coefficient always evaluates to 1 (log(1) = 0). 
+        if not floor:
+            # if trials aren't floored, binom's pmf might nan
+            elicited_logliks = xlogy(k, soft_G) + xlog1py(n-k, -soft_G)
 
         return jnp.sum(zero_diagonal(jnp.where(E == 0.5, 0, elicited_logliks)))
