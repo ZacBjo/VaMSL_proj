@@ -90,6 +90,34 @@ def expected_shd(*, dist, g):
     return eshd
 
 
+def get_edge_probs(*, dist):
+    """
+    Computes marginal edge probabilities in particle distribution, defined as
+
+    :math:`P(G_ij = 1) = sum_G w_G 1[G = G]`
+
+    Args:
+        dist (:class:`dibs.metrics.ParticleDistribution`): particle distribution
+
+    Returns:
+        edge probabilities ``[n_vars, n_vars]``
+    """
+    n_vars = dist.g.shape[-1]
+    is_dag = elwise_acyclic_constr_nograd(dist.g, n_vars) == 0
+    
+    particles = dist.g[is_dag, :, :]
+    log_weights = dist.logp[is_dag] - logsumexp(dist.logp[is_dag])
+
+    # P(G_ij = 1) = sum_G w_G 1[G = G] in log space
+    log_edge_belief, log_edge_belief_sgn = logsumexp(
+        log_weights[..., jnp.newaxis, jnp.newaxis], 
+        b=particles.astype(log_weights.dtype), 
+        axis=0, return_sign=True)
+    p_edge = log_edge_belief_sgn * jnp.exp(log_edge_belief)
+    
+    return p_edge
+
+
 def expected_edges(*, dist):
     """
     Computes expected number of edges, defined as
