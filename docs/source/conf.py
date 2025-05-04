@@ -17,9 +17,9 @@ sys.path.insert(0, os.path.abspath('./../../'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'dibs'
-copyright = '2021, Lars Lorch'
-author = 'Lars Lorch'
+project = 'VaMSL'
+copyright = ''
+author = ''
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
