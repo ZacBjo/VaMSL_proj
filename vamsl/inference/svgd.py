@@ -118,7 +118,7 @@ class MixtureJointDiBS(MixtureDiBS):
             latent_prior_std=latent_prior_std,
             verbose=verbose,
         )
-
+        
         self.likelihood_model = likelihood_model
         self.graph_model = graph_model
         self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
@@ -474,7 +474,7 @@ class MixtureJointDiBS(MixtureDiBS):
         else:
             # non-linear parameters don't support vectorized mapping, replace with inbuilt map
             ts, steps = q_z.shape[0]*[t], q_z.shape[0]*[steps]
-            q_z_theta_baselines = [q for q in map(self._sample_component, ts, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, E_stack)]
+            q_z_theta_baselines = list(map(self._sample_component, ts, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, E_stack))
             # Unpack results
             q_z = jnp.stack([q_z_theta_baselines[k][0] for k in range(q_z.shape[0])], axis=0)
             q_theta = [q_z_theta_baselines[k][1] for k in range(q_z.shape[0])]
@@ -562,7 +562,7 @@ class MixtureJointDiBS(MixtureDiBS):
         return ParticleDistribution(logp=logp, g=g, theta=theta)
 
 
-    def get_mixture(self, g, theta):
+    def get_mixture(self, g, theta, cs):
         """
         Converts batch of binary (adjacency) matrices and particles into *mixture* particle distribution,
         where mixture weights correspond to unnormalized target (i.e. posterior) probabilities
@@ -580,10 +580,14 @@ class MixtureJointDiBS(MixtureDiBS):
         N, _, _ = g.shape
 
         # mixture weighted by respective joint probabilities
-        eltwise_log_joint_target = vmap(lambda single_g, single_theta:
-                                        self.log_joint_prob(single_g, single_theta, self.x, self.interv_mask, None),
-                                        (0, 0), 0)
-        logp = eltwise_log_joint_target(g, theta)
+        
+        assginment_wise_log_joint_target = lambda single_g, single_theta, cs: logsumexp(a=jnp.array([self.log_joint_prob(single_g, single_theta, self.x, c, 
+                                                                                                                         self.interv_mask, None) for c in cs]), 
+                                                                                        b=1/cs.shape[0])
+        eltwise_log_joint_target = vmap(assginment_wise_log_joint_target,
+                                        (0, 0, None), 0)
+        
+        logp = eltwise_log_joint_target(g, theta, cs)
         logp -= logsumexp(logp)
 
         return ParticleDistribution(logp=logp, g=g, theta=theta)
