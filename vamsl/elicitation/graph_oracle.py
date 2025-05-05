@@ -44,7 +44,7 @@ class graphOracle:
         return vmap(self.answer_query, (None, 0, None))(component, queries, soft)
     
     
-    def stochastically_answer_query(self, key, reliability, component, query, soft):
+    def stochastically_answer_query(self, key, reliability, component, query, soft, decimals=3):
         """
         Stochastically returns the edge existence (0/1) for the edge in the given ground truth graph.
         The accuracy of the repsonses is determined by the [0,1] reliability value.
@@ -73,13 +73,15 @@ class graphOracle:
             m = jnp.abs(m - 1 + self.graphs[component][i, j]) # invert mean depending on edge existence
             get_alpha = lambda m, s: m * (((m * (1-m)) / s**2))
             get_beta = lambda m, s: (1-m) * (((m * (1-m)) / s**2))
+            # Get opinionated value
             key, subk = random.split(key)
-            beta_e_ij = random.beta(key=subk, a=get_alpha(m,s), b=get_beta(m,s))
+            beta_e_ij = jnp.round(random.beta(key=subk, a=get_alpha(m,s), b=get_beta(m,s)), decimals=decimals)
+            # Get random value
             key, subk = random.split(key)
             if a_r == 1 and b_r == 1:
-                random_e_ij = random.uniform(key=subk, minval=0, maxval=1)
+                random_e_ij = jnp.round(random.uniform(key=subk, minval=0, maxval=1), decimals=decimals)
             else:
-                random_e_ij = random.beta(key=subk, a=a_r, b=b_r)
+                random_e_ij = jnp.round(random.beta(key=subk, a=a_r, b=b_r), decimals=decimals)
             
             # Get a uniform sample to determine randomness of response 
             u = random.uniform(key=key, minval=0, maxval=1)
