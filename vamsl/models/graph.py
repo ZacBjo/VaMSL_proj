@@ -656,7 +656,7 @@ class ElicitationBinomial:
         if isinstance(lamda, int):
             schedule = lamda
             prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
-            inv_t = jnp.max(jnp.array([(schedule-t) / (t+1), 1]))
+            inv_t = jnp.max(jnp.array([schedule-t, 1]))
         elif len(lamda) == 2:
             alpha_e, beta_e = lamda
             prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
@@ -683,13 +683,8 @@ class ElicitationBinomial:
                        )
         
         # Expert has only conditioned on "whole" observations 
-        elicited_logliks = binom.logpmf(k = k,
-                                        n = n,
-                                        p = soft_G)
-        
+        #elicited_logliks = binom.logpmf(k = k, n = n, p = soft_G)
         # Binomial coefficient always evaluates to 1 (log(1) = 0). 
-        if not floor:
-            # if trials aren't floored, binom's pmf might nan
-            elicited_logliks = xlogy(k, soft_G) + xlog1py(n-k, -soft_G)
+        elicited_logliks = xlogy(k, soft_G) + xlog1py(n-k, -soft_G)
 
         return jnp.sum(zero_diagonal(jnp.where(E == 0.5, 0, elicited_logliks)))
