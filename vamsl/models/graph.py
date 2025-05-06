@@ -634,20 +634,30 @@ class ElicitationBinomial:
 
         """
         # Mask hard constraints as uniform to remove their influence (hard constraints are applied via p(G|Z,E))
-        E = jnp.where(E == 1.0,
+        E = jnp.where(jnp.equal(E, 1.0),
                       0.5,
-                      jnp.where(E == 0.0, 
+                      jnp.where(jnp.equal(E, 0.0), 
                                 0.5,
                                 # [n_observations, n_vars]
                                 E
                                )
                      )
         
-        err = 10**-7
-        soft_G = jnp.where(soft_G == 1.0,
-                      soft_G - err,
-                      jnp.where(soft_G == 0.0, 
-                                soft_G + err,
+        # handle probs too close to 1 or 0
+        err = 1e-7
+        E = jnp.where(jnp.isclose(E, 1.0),
+                      1 - err,
+                      jnp.where(jnp.isclose(E, 0.0), 
+                                err,
+                                # [n_observations, n_vars]
+                                E
+                               )
+                     )
+        err = 1e-7
+        soft_G = jnp.where(jnp.isclose(soft_G, 1.0),
+                      1 - err,
+                      jnp.where(jnp.isclose(soft_G, 0.0), 
+                                err,
                                 # [n_observations, n_vars]
                                 soft_G
                                )
@@ -666,25 +676,27 @@ class ElicitationBinomial:
             prior_alphas, prior_betas = alpha_e * jnp.ones_like(E), beta_e * jnp.ones_like(E)
             inv_t = jnp.max(jnp.array([schedule-t, 1]))
         
-        k_temp = inv_t * ((E*(alpha_e + beta_e - 2) - alpha_e + 1) / (1-E))
+        #k_temp = inv_t * ((E*(alpha_e + beta_e - 2) - alpha_e + 1) / (1-E)) # for scheduled linear temperature
+        k_temp = (E*(alpha_e + beta_e - 2) - alpha_e + 1) / (1-E)
         k = jnp.where(E > 0.5,
-                      jnp.floor(k_temp) if floor else k_temp,
+                      jnp.floor(k_temp),
                       jnp.where(E < 0.5,
                                 0,
                                 0)
                        )
         
-        n_temp = inv_t * ((alpha_e - 1 - E*(alpha_e + beta_e - 2)) / (E))
+        #n_temp = inv_t * ((alpha_e - 1 - E*(alpha_e + beta_e - 2)) / (E)) # for scheduled linear temperature
+        n_temp = (alpha_e - 1 - E*(alpha_e + beta_e - 2)) / (E)
         n = jnp.where(E > 0.5,
                       k,
                       jnp.where(E < 0.5, 
-                                jnp.floor(n_temp) if floor else n_temp, 
+                                jnp.floor(n_temp), 
                                 0)
                        )
         
         # Expert has only conditioned on "whole" observations 
-        #elicited_logliks = binom.logpmf(k = k, n = n, p = soft_G)
+        elicited_logliks = binom.logpmf(k = k, n = n, p = soft_G)
         # Binomial coefficient always evaluates to 1 (log(1) = 0). 
-        elicited_logliks = xlogy(k, soft_G) + xlog1py(n-k, -soft_G)
+        #elicited_logliks = xlogy(k, soft_G) + xlog1py(n-k, -soft_G)
 
         return jnp.sum(zero_diagonal(jnp.where(E == 0.5, 0, elicited_logliks)))

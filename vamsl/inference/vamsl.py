@@ -119,7 +119,8 @@ class VaMSL(MixtureJointDiBS):
                 if self.stochastic_elicitation:
                     probs = jnp.where(E_k > 0.5, E_k, 1-E_k)
                     key, subk = random.split(key)
-                    trials = random.bernoulli(subk, p=probs, shape=E_k.shape)
+                    # mask edges that haven't been queried
+                    trials = jnp.where(E_k == 0.5, 1, random.bernoulli(subk, p=probs, shape=E_k.shape))
                 else:
                     trials = jnp.ones_like(E_k)
                 E_particles = E_particles.at[k,p,:,:].set(jnp.where(trials, E_k, 0.5))
