@@ -120,7 +120,7 @@ class graphOracle:
             responses = self.stochastically_answer_queries(key=key, reliability=reliability,
                                                            component=component, queries=queries,soft=soft)
         else:
-            responses = self.answer_queries(component=component, queries=queries,soft=soft)
+            responses = self.answer_queries(component=component, queries=queries, soft=soft)
         
         # Update entries in elicitation matrix with responses
         if soft:
@@ -129,9 +129,9 @@ class graphOracle:
         else:
             for q, r in zip(queries, responses):
                 if r == 1:
-                    E = E.at[component, q[0], q[1]].set(1)
+                    E = E.at[component, q[0], q[1]].set(r)
                     E = E.at[component, q[1], q[0]].set(0)
                 else:
-                    E = E.at[component, q[0], q[1]].set(0)
+                    E = E.at[component, q[0], q[1]].set(r)
         
         return E
