@@ -115,7 +115,7 @@ class VaMSL(MixtureJointDiBS):
         E_particles = jnp.stack([jnp.repeat(self.E[k, np.newaxis, :, :], self.n_particles, axis=0) for k in range(self.q_z.shape[0])])
         for k in range(self.q_z.shape[0]):
             for p in range(self.n_particles):
-                E_k = E_particles[k,p,:,:]
+                E_k = E_particles[k,p,:,:].astype('float32') # handle hard constraints
                 if self.stochastic_elicitation:
                     probs = jnp.where(E_k > 0.5, E_k, 1-E_k)
                     key, subk = random.split(key)
