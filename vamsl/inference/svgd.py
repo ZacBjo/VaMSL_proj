@@ -66,7 +66,6 @@ class MixtureJointDiBS(MixtureDiBS):
     def __init__(self, *,
                  x,
                  graph_model,
-                 elicitation_graph_model,
                  likelihood_model,
                  interv_mask=None,
                  kernel=JointAdditiveFrobeniusSEKernel,
@@ -81,7 +80,6 @@ class MixtureJointDiBS(MixtureDiBS):
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
-                 n_elicitation_grad_mc_samples=1,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
                  latent_prior_std=None,
@@ -103,7 +101,6 @@ class MixtureJointDiBS(MixtureDiBS):
             x=x,
             interv_mask=interv_mask,
             log_graph_prior=graph_model.unnormalized_log_prob_soft,
-            log_graph_elicitation_prior=elicitation_graph_model.joint_log_prob_soft,
             log_joint_prob=likelihood_model.interventional_log_joint_prob,
             alpha_linear=alpha_linear,
             beta_linear=beta_linear,
@@ -112,7 +109,6 @@ class MixtureJointDiBS(MixtureDiBS):
             elicitation_prior=elicitation_prior,
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
-            n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples,
             grad_estimator_z=grad_estimator_z,
             score_function_baseline=score_function_baseline,
             latent_prior_std=latent_prior_std,
@@ -395,6 +391,10 @@ class MixtureJointDiBS(MixtureDiBS):
         key, *batch_subk = random.split(key, n_particles + 1)
         dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k, c, E_k_stack)
         
+        #debug.print('theta lik. :  {x}',x=jnp.absolute(dtheta_log_prob.mean()))
+        #debug.print('Z lik. :  {x}',x=jnp.absolute(dz_log_likelihood.mean()))
+        #debug.print('Z prior :  {x}',x=jnp.absolute(dz_log_prior.mean()))
+        #debug.print('------------------------------------')
         # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood
         
@@ -584,8 +584,7 @@ class MixtureJointDiBS(MixtureDiBS):
         assginment_wise_log_joint_target = lambda single_g, single_theta, cs: logsumexp(a=jnp.array([self.log_joint_prob(single_g, single_theta, self.x, c, 
                                                                                                                          self.interv_mask, None) for c in cs]), 
                                                                                         b=1/cs.shape[0])
-        eltwise_log_joint_target = vmap(assginment_wise_log_joint_target,
-                                        (0, 0, None), 0)
+        eltwise_log_joint_target = vmap(assginment_wise_log_joint_target, (0, 0, None), 0)
         
         logp = eltwise_log_joint_target(g, theta, cs)
         logp -= logsumexp(logp)

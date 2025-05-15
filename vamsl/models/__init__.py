@@ -1,4 +1,4 @@
-from .graph import ErdosReniDAGDistribution, ScaleFreeDAGDistribution, UniformDAGDistributionRejection, ConcentratedElicitationBernoulli, ElicitationBinomial
+from .graph import ErdosReniDAGDistribution, ScaleFreeDAGDistribution, UniformDAGDistributionRejection, ElicitationBinomial
 from .linearGaussian import LinearGaussian
 from .nonlinearGaussian import DenseNonlinearGaussian
 from .mixtureLinearGaussian import MixtureLinearGaussian

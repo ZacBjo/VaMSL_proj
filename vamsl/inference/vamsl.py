@@ -16,7 +16,7 @@ from vamsl.utils.func import stable_softmax
 from vamsl.graph_utils import elwise_acyclic_constr_nograd
 from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.utils.func import expand_by, zero_diagonal
-from vamsl.models.graph import DirichletSimilarity
+from vamsl.models.graph import ElicitationBinomial
 
 from jax import debug
 
@@ -36,7 +36,6 @@ class VaMSL(MixtureJointDiBS):
                  E_particles=None,
                  n_particles = None,
                  graph_model,
-                 elicitation_graph_model=DirichletSimilarity(),
                  mixture_likelihood_model,
                  component_likelihood_model,
                  interv_mask=None,
@@ -48,11 +47,10 @@ class VaMSL(MixtureJointDiBS):
                  beta_linear=1.0,
                  tau=1.0,
                  lamda=0.0,
-                 elicitation_prior=None, #'soft', 'hard' or None
+                 elicitation_prior=None, # True / 'Bin' or False
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
-                 n_elicitation_grad_mc_samples=1,
                  stochastic_elicitation=False,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
@@ -87,7 +85,6 @@ class VaMSL(MixtureJointDiBS):
         super().__init__(
             x=x,
             graph_model=graph_model,
-            elicitation_graph_model=elicitation_graph_model,
             likelihood_model=mixture_likelihood_model,
             interv_mask=interv_mask,
             kernel=kernel,
@@ -102,7 +99,6 @@ class VaMSL(MixtureJointDiBS):
             n_grad_mc_samples=n_grad_mc_samples,
             n_acyclicity_mc_samples=n_acyclicity_mc_samples,
             n_mixture_grad_mc_samples=n_mixture_grad_mc_samples,
-            n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples,
             grad_estimator_z=grad_estimator_z,
             score_function_baseline=score_function_baseline,
             latent_prior_std=latent_prior_std,
@@ -191,10 +187,11 @@ class VaMSL(MixtureJointDiBS):
         detailed in original DiBS article. 
 
         Args:
-            None
-
+            empirical (boolean): True to sample empirical and False for mixture particle distributions  
+            key (ndarray): PRNG key needed to compute mixture particle distribution
+            
         Returns:
-            List of length n_components with ParticleDistribution objects.
+            List of length n_components :class:`dibs.metrics.ParticleDistribution` objects.
 
         """
         K = self.log_q_c.shape[1]
@@ -245,8 +242,7 @@ class VaMSL(MixtureJointDiBS):
     
     def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None, linear=True):
         """
-        Initializes variational posteriors for mixing weights q(\pi) and embbedded graph and paramter 
-        particles q(Z, \Theta). If no  
+        Optimize particle component particle distributions q(Z_k, \Theta_k).  
 
         Args:
             key (ndarray): prng key
@@ -317,11 +313,6 @@ class VaMSL(MixtureJointDiBS):
                                                     eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,
                                                     x=x_n)
         
-        ## TEST
-        #expected_log_lik = - neg_log_posterior_predictive_density(key=random.PRNGKey(1), q_pi=jnp.ones((1,)), dists=[dist_k], eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ,x=x_n.reshape(1,-1),n_mixing_mc_samples=1)
-        #expected_log_lik = expected_log_likelihood(x=x_n, dist=dist_k, eltwise_log_likelihood=self.eltwise_component_log_likelihood_observ)
-        ## END TEST
-        
         log_responsibility = expected_log_lik + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
                                                       
         return log_responsibility
@@ -332,10 +323,10 @@ class VaMSL(MixtureJointDiBS):
         CAVI updates for variational assigment and mixing weight distributions.
 
         Args:
-            x: N new observations of shape ```[N, n_vars]```
+            x (ndarray): N new observations of shape ```[N, n_vars]```
 
         Returns:
-            log_responsibilities: responsibilities of shape ```[N, n_components]```
+            log_responsibilities (ndarray): responsibilities of shape ```[N, n_components]```
 
         """
         K = self.log_q_c.shape[1] # number of components

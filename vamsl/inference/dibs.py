@@ -10,8 +10,7 @@ jax.config.update("jax_debug_nans", True)
 
 from vamsl.graph_utils import acyclic_constr_nograd
 from vamsl.utils.func import expand_by, zero_diagonal
-from vamsl.models.graph import DirichletSimilarity
-from vamsl.models.graph import ElicitationBernoulli, ConcentratedElicitationBernoulli, SoftGraphElicitationBeta, ElicitationBinomial
+from vamsl.models.graph import ElicitationBinomial
 
 
 class MixtureDiBS:
@@ -57,7 +56,6 @@ class MixtureDiBS:
                  x,
                  interv_mask,
                  log_graph_prior,
-                 log_graph_elicitation_prior,
                  log_joint_prob,
                  alpha_linear=0.05,
                  beta_linear=0.25,
@@ -66,7 +64,6 @@ class MixtureDiBS:
                  elicitation_prior=None,
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
-                 n_elicitation_grad_mc_samples=1,
                  grad_estimator_z='reparam',
                  score_function_baseline=0.0,
                  latent_prior_std=None,
@@ -75,7 +72,6 @@ class MixtureDiBS:
         self.interv_mask = interv_mask
         self.n_vars = x.shape[-1]
         self.log_graph_prior = log_graph_prior
-        self.log_graph_elicitation_prior = log_graph_elicitation_prior
         self.log_joint_prob = log_joint_prob
         self.alpha = lambda t: (alpha_linear * t)
         self.beta = lambda t: (beta_linear * t)
@@ -84,7 +80,6 @@ class MixtureDiBS:
         self.elicitation_prior=elicitation_prior
         self.n_grad_mc_samples = n_grad_mc_samples
         self.n_acyclicity_mc_samples = n_acyclicity_mc_samples
-        self.n_elicitation_grad_mc_samples=n_elicitation_grad_mc_samples
         self.grad_estimator_z = grad_estimator_z
         self.score_function_baseline = score_function_baseline
         self.latent_prior_std = latent_prior_std
@@ -92,7 +87,7 @@ class MixtureDiBS:
 
         
     #
-    # Backbone functionality
+    # Backbone functionality (overrides in VaMSL)
     #
 
     def particle_to_g_lim(self, z):
@@ -177,7 +172,7 @@ class MixtureDiBS:
 
     
     #
-    # Generative graph model p(G | Z)
+    # Generative graph model p(G | Z) (overrides in VaMSL)
     #
 
     def edge_probs(self, z, t):
@@ -488,7 +483,7 @@ class MixtureDiBS:
 
 
     #
-    # Estimators for score d/dZ log p(Z)
+    # Estimators for score d/dZ log p(Z) and p(Z | f(D_Psi)) 
     #
 
     def constraint_gumbel(self, single_z, single_eps, t, E_k):
@@ -562,137 +557,29 @@ class MixtureDiBS:
         return graph_prior
     
     
-#### TESTING ELICITATION START
-    
-    def single_grad_elicitation(self, single_z, G, t, E_k):
+    def log_binomial_soft_graph_elicitation_prior_particle(self, single_z, t, E_k):
         """
-        Evaluates elicited log posterior prob using Bernoulli sample
+        Computes :math:`\\log p(f(D_Psi) | G(Z))` component of :math:`\\log p(Z | f(D_Psi))`,
+        i.e. the elicitation prior term.
 
-        Args:
-            single_z (ndarray): single latent tensor ``[d, k, 2]``
-            G (ndarray): Bernoulli sampled adjecency matrix of shape ``[d, d]``
-            t (int): step
-            E_k (ndarray): Eliciation matrix of shape ``[d, d]``
-
-        Returns:
-            grad of shape ``[1,]``
-        """
-        if self.elicitation_prior == 'conc_hard':
-            f = ConcentratedElicitationBernoulli().joint_log_prob(G=G, E=E_k, lamda=self.lamda, t=t)
-        else:
-            f = ElicitationBernoulli().joint_log_prob(G=G, E=E_k)
-        
-        particle_grad = grad(self.latent_log_prob, 1)(G, single_z, E_k, t)
-        
-        return f * particle_grad
-        return f, particle_grad
-
-
-    def grad_elicitation(self, single_z, key, t, E_k):
-        """
-        Reparameterization estimator for the gradient :math:`\\nabla_Z E_{p(G|Z)} [ \log p(E \mid G) ]`
-        where :math:`p(E \mid G)` is the elicited posterior probability.
-
-        Args:
-            single_z (ndarray): single latent tensor ``[d, k, 2]``
-            key (ndarray): rng
-            t (int): step
-            E_k (ndarray): Eliciation matrix of shape ``[d, d]``
-
-        Returns:
-            gradient of shape ``[d, k, 2]``
-        """
-        # [d, d]
-        p = self.edge_probs(single_z, t, E_k)
-        
-        # [n_mc_samples, d, d]
-        Gs = self.sample_g(p, key, n_samples=self.n_elicitation_grad_mc_samples)
-
-        # [n_mc_samples, d, k, 2]
-        mc_gradient_samples = vmap(self.single_grad_elicitation, (None, 0, None, None), 0)(single_z, Gs, t, E_k)
-        return mc_gradient_samples.mean(axis=0)
-        
-        particle_fs, particle_grads = mc_gradient_samples = vmap(self.single_grad_elicitation, (None, 0, None, None), 0)(single_z, Gs, t, E_k)
-        signs, mc_gradient_samples = logsumexp(a=particle_fs[...,None,None,None], b=particle_grads, axis=0, return_sign=True) # grads needs to be broadcastable to fs
-        
-        # [d, k, 2]
-        return - jax.numpy.nan_to_num(signs * (1 / self.n_elicitation_grad_mc_samples) * mc_gradient_samples, nan=0)
-
-
-### SOFT GRAPH ELICITATION
-    
-    def log_soft_graph_elicitation_prior_particle(self, single_z, t, E_k):
-        """
-        Computes :math:`\\log p(G)` component of :math:`\\log p(Z)`,
-        i.e. not the contraint or Gaussian prior term, but the DAG belief.
-
-        The log prior :math:`\\log p(G)` is evaluated with
+        The log prior :math:`\\log p(f(D_Psi) | G(Z))` is evaluated with
         edge probabilities :math:`G_{\\alpha}(Z)` given :math:`Z`.
 
         Args:
             single_z (ndarray): single latent tensor ``[d, k, 2]``
             t (int): step
+            E_k: elicitation matrix with entries with expert beliefs ``[d, d]``
 
         Returns:
-            log prior graph probability`\\log p(G_{\\alpha}(Z))`  of shape ``[1,]``
+            log elicitation prior graph probability`\\log p(G_{\\alpha}(Z))`  of shape ``[1,]``
         """
         # [d, d] # masking is done inside `edge_probs`
         single_soft_g = self.edge_probs(single_z, t, E_k)
 
         # [1, ]
-        elicitation_soft_graph_prior = SoftGraphElicitationBeta().joint_unnorm_log_prob(soft_G=single_soft_g, E=E_k)
+        elicitation_bin_joint_prob = ElicitationBinomial().joint_unnorm_log_prob(soft_G=single_soft_g, E=E_k, lamda=self.lamda, t=t)
 
-        return elicitation_soft_graph_prior
-    
-    
-    def log_test_soft_graph_elicitation_prior_particle(self, single_z, t, E_k):
-        """
-        Computes :math:`\\log p(G)` component of :math:`\\log p(Z)`,
-        i.e. not the contraint or Gaussian prior term, but the DAG belief.
-
-        The log prior :math:`\\log p(G)` is evaluated with
-        edge probabilities :math:`G_{\\alpha}(Z)` given :math:`Z`.
-
-        Args:
-            single_z (ndarray): single latent tensor ``[d, k, 2]``
-            t (int): step
-
-        Returns:
-            log prior graph probability`\\log p(G_{\\alpha}(Z))`  of shape ``[1,]``
-        """
-        # [d, d] # masking is done inside `edge_probs`
-        single_soft_g = self.edge_probs(single_z, t, E_k)
-
-        # [1, ]
-        elicitation_soft_graph_prior = ElicitationBinomial().joint_unnorm_log_prob(soft_G=single_soft_g, E=E_k, lamda=self.lamda, t=t)
-
-        return elicitation_soft_graph_prior
-    
-    
-    def log_DirSim_soft_graph_elicitation_prior_particle(self, single_z, t, E_k):
-        """
-        Computes :math:`\\log p(G)` component of :math:`\\log p(Z)`,
-        i.e. not the contraint or Gaussian prior term, but the DAG belief.
-
-        The log prior :math:`\\log p(G)` is evaluated with
-        edge probabilities :math:`G_{\\alpha}(Z)` given :math:`Z`.
-
-        Args:
-            single_z (ndarray): single latent tensor ``[d, k, 2]``
-            t (int): step
-
-        Returns:
-            log prior graph probability`\\log p(G_{\\alpha}(Z))`  of shape ``[1,]``
-        """
-        # [d, d] # masking is done inside `edge_probs`
-        single_soft_g = self.edge_probs(single_z, t, E_k)
-
-        # [1, ]
-        elicitation_soft_graph_prior = DirichletSimilarity().joint_log_prob_soft(soft_g=single_soft_g, E=E_k, N=1)
-
-        return elicitation_soft_graph_prior
-
-#### TESTING ELICITATION END
+        return elicitation_bin_joint_prob
 
 
     def eltwise_grad_latent_prior(self, zs, subkeys, t, E_k, c, E_k_stack):
@@ -725,58 +612,16 @@ class MixtureDiBS:
         eltwise_grad_constraint = vmap(self.grad_constraint_gumbel, (0, 0, None, None), 0)(zs, subkeys, t, E_k)
         
         # elicitation prior term
-        if self.elicitation_prior is None:
-            grad_elicitation_prior_z = jnp.zeros_like(grad_prior_z)
-            
-        elif self.elicitation_prior == 'hard':
-            # Elicitation prior term based on sampling hard graphs from Z particles
-            key, *batch_subk = random.split(subkeys[0], zs.shape[0] + 1)
-            # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
-            grad_elicitation_prior_z = self.lamda * vmap(self.grad_elicitation, (0, 0, None, None), 0)(zs, jnp.array(batch_subk), t, E_k)
-        
-        elif self.elicitation_prior == 'conc_hard':
-            # Elicitation prior term based on sampling hard graphs from Z particles
-            key, *batch_subk = random.split(subkeys[0], zs.shape[0] + 1)
-            # [n_particles, d, k, 2], [n_particles,], [1,] -> [n_particles, d, k, 2]
-            grad_elicitation_prior_z = vmap(self.grad_elicitation, (0, 0, None, 0), 0)(zs, jnp.array(batch_subk), t, E_k_stack)
-            
-        elif self.elicitation_prior == 'soft':
-            # Elicitation term based on soft graph G(Z)
+        if self.elicitation_prior == 'Bin' or self.elicitation_prior:
             # [d, k, 2], [1,] -> [d, k, 2]
-            grad_log_soft_graph_elicitation_prior_particle = grad(self.log_soft_graph_elicitation_prior_particle, 0)
-            # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
-            grad_elicitation_prior_z = vmap(grad_log_soft_graph_elicitation_prior_particle, (0, None, None), 0)(zs, t, E_k)
-        
-        elif self.elicitation_prior == 'Bin':
-            # [d, k, 2], [1,] -> [d, k, 2]
-            grad_log_soft_graph_elicitation_prior_particle = grad(self.log_test_soft_graph_elicitation_prior_particle, 0)
+            grad_log_soft_graph_elicitation_prior_particle = grad(self.log_binomial_soft_graph_elicitation_prior_particle, 0)
             # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
             grad_elicitation_prior_z = vmap(grad_log_soft_graph_elicitation_prior_particle, (0, None, 0), 0)(zs, t, E_k_stack)
-            
-        elif self.elicitation_prior == 'DirSim':
-            # [d, k, 2], [1,] -> [d, k, 2]
-            grad_log_soft_graph_elicitation_prior_particle = grad(self.log_DirSim_soft_graph_elicitation_prior_particle, 0)
-            # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
-            grad_elicitation_prior_z = vmap(grad_log_soft_graph_elicitation_prior_particle, (0, None, None), 0)(zs, t, E_k)
-            
-        #debug.print('h(x):     {x}',x= jnp.absolute(eltwise_grad_constraint).mean())
-        #debug.print('b * h(x): {x}',x= jnp.absolute(self.beta(t) * eltwise_grad_constraint).mean())
-        #debug.print('numerics: {x}',x=jnp.absolute(zs / (self.latent_prior_std ** 2.0)).mean())
-        #debug.print('rand. G:  {x}',x=jnp.absolute(grad_prior_z).mean())
-        #debug.print('elicit. :  {x}',x=jnp.absolute(grad_elicitation_prior_z.mean()))
-        #debug.print('elicit. max:  {x}',x=jnp.max(grad_elicitation_prior_z))
-        #debug.print('lambda :  {x}',x=jnp.max(jnp.array([self.lamda[2]-t, 1])))
-        #debug.print('-------------------------------------------')
-        
-        #return eltwise_grad_elicitation
-        #return self.beta(t) * eltwise_grad_elicitation
-        #return eltwise_grad_elicitation - zs / (self.latent_prior_std ** 2.0)
-        #return eltwise_grad_elicitation + grad_prior_z 
-        #return eltwise_grad_elicitation - (zs / (self.latent_prior_std ** 2.0)) + grad_prior_z 
-        #return - self.beta(t) * eltwise_grad_constraint + (self.n_vars**2) * eltwise_grad_elicitation \
-        
-        #return grad_elicitation_prior_z
-        #return - self.beta(t) * eltwise_grad_constraint + grad_elicitation_prior_z
+        if self.elicitation_prior is None or not self.elicitation_prior:
+            grad_elicitation_prior_z = jnp.zeros_like(grad_prior_z)
+        else:
+            assert True, 'Supply correct specification for elicitation prior (e.g. either elicitation_prior=True or elicitation_prior=False)'
+
         
         return - self.beta(t) * eltwise_grad_constraint \
                - zs / (self.latent_prior_std ** 2.0) \
