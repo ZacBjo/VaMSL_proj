@@ -8,6 +8,8 @@ from vamsl.graph_utils import graph_to_mat
 from vamsl.models import MixtureLinearGaussian, MixtureDenseNonlinearGaussian
 from vamsl.models import LinearGaussian, DenseNonlinearGaussian
 
+from vamsl.metrics import pairwise_structural_hamming_distance
+
 from typing import Any, NamedTuple
 
 
@@ -80,6 +82,7 @@ def make_synthetic_bayes_net(*,
     key, subk = random.split(key)
     g_gt = graph_model.sample_G(subk)
     g_gt_mat = jnp.array(graph_to_mat(g_gt))
+    
 
     key, subk = random.split(key)
     theta = generative_model.sample_parameters(key=subk, n_vars=n_vars)
@@ -121,7 +124,7 @@ def make_synthetic_bayes_net(*,
     return data
     
 
-def make_graph_model(*, n_vars, graph_prior_str, edges_per_node=2):
+def make_graph_model(*, n_vars, graph_prior_str, edges_per_node=2, mat=None):
     """
     Instantiates graph model
 
@@ -136,12 +139,12 @@ def make_graph_model(*, n_vars, graph_prior_str, edges_per_node=2):
     if graph_prior_str == 'er':
         graph_model = ErdosReniDAGDistribution(
             n_vars=n_vars, 
-            n_edges_per_node=edges_per_node)
+            n_edges_per_node=edges_per_node, mat=mat)
 
     elif graph_prior_str == 'sf':
         graph_model = ScaleFreeDAGDistribution(
             n_vars=n_vars,
-            n_edges_per_node=edges_per_node)
+            n_edges_per_node=edges_per_node, mat=mat)
 
     else:
         assert n_vars <= 5, "Naive uniform DAG sampling only possible up to 5 nodes"
@@ -216,7 +219,7 @@ def make_linear_gaussian_equivalent_model(*, key, n_vars=20, graph_prior_str='sf
 
 def make_linear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf', 
     obs_noise=0.1, mean_edge=0.0, sig_edge=1.0, min_edge=0.5, n_observations=100,
-    n_ho_observations=100, edges_per_node=2):
+    n_ho_observations=100, edges_per_node=2, mat=None):
     """
     Samples a synthetic linear Gaussian BN instance 
 
@@ -238,6 +241,7 @@ def make_linear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
 
     # init models
     graph_model = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str, edges_per_node=edges_per_node)
+    graph_model_mat = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str, edges_per_node=edges_per_node, mat=mat)
 
     generative_model = LinearGaussian(
         n_vars=n_vars,
@@ -260,18 +264,17 @@ def make_linear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
     data = make_synthetic_bayes_net(
         key=subk,
         n_vars=n_vars,
-        graph_model=graph_model,
+        graph_model=graph_model_mat,
         generative_model=generative_model,
         n_observations=n_observations,
-        n_ho_observations=n_ho_observations,
-    )
+        n_ho_observations=n_ho_observations,)
 
     return data, graph_model, likelihood_model
 
 
 def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf', 
     obs_noise=0.1, sig_param=1.0, hidden_layers=(5,), n_observations=100,
-    n_ho_observations=100, edges_per_node=2):
+    n_ho_observations=100, edges_per_node=2, mat=None):
     """
     Samples a synthetic nonlinear Gaussian BN instance 
     where the local conditional distributions are parameterized
@@ -296,6 +299,7 @@ def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
 
     # init models
     graph_model = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str, edges_per_node=edges_per_node)
+    graph_model_mat = make_graph_model(n_vars=n_vars, graph_prior_str=graph_prior_str, edges_per_node=edges_per_node, mat=mat)
 
     generative_model = DenseNonlinearGaussian(
         n_vars=n_vars,
@@ -315,16 +319,16 @@ def make_nonlinear_gaussian_model(*, key, n_vars=20, graph_prior_str='sf',
     key, subk = random.split(key)
     data = make_synthetic_bayes_net(
         key=subk, n_vars=n_vars,
-        graph_model=graph_model,
+        graph_model=graph_model_mat,
         generative_model=generative_model,
         n_observations=n_observations,
-        n_ho_observations=n_ho_observations)
+        n_ho_observations=n_ho_observations,)
 
     return data, graph_model, likelihood_model
 
 
 def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, struct_eq_type, edges_per_node=2,
-                       obs_noise=0.1, mean_edge=0.0, sig_edge=1.0, min_edge=0.5, sig_param=1.0, hidden_layers=(5,5)):
+                       obs_noise=0.1, mean_edge=0.0, sig_edge=1.0, min_edge=0.5, sig_param=1.0, hidden_layers=(5,5), mat=None):
     """
     Generate data for one experiment run. Data is generated from n_components number of randomly generated graphs. 
     The data is stacked and then shuffled.
@@ -360,6 +364,8 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
     thetas = []
     # loop over components
     key, *subks = random.split(key, len(mixing_rate)+1) # Generate subkeys for each component
+    k = 0
+    mat = [None for i in range(len(mixing_rate))] if mat is None else mat
     for subk, n_comp_obs in zip(jnp.array(subks), comp_observations):
         if struct_eq_type == "linear":
             data, graph_model, component_lik_model = make_data_model(key=subk, n_vars=n_vars, 
@@ -367,17 +373,18 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
                                                                      edges_per_node=edges_per_node,
                                                                      n_observations=int(n_comp_obs.item()),
                                                                      obs_noise=obs_noise, mean_edge=mean_edge, 
-                                                                     sig_edge=sig_edge, min_edge=min_edge)
+                                                                     sig_edge=sig_edge, min_edge=min_edge, mat=mat[k])
         elif struct_eq_type == 'nonlinear':
             data, graph_model, component_lik_model = make_data_model(key=subk, n_vars=n_vars, 
                                                                      graph_prior_str=graph_type,
                                                                      edges_per_node=edges_per_node,
                                                                      n_observations=int(n_comp_obs.item()),
                                                                      obs_noise=obs_noise, sig_param=sig_param, 
-                                                                     hidden_layers=hidden_layers)
+                                                                     hidden_layers=hidden_layers, mat=mat[k])
         xs.append(data.x)
         graphs.append(data.g)
         thetas.append(data.theta)
+        k+=1
     
     # Combine observation sets
     x = np.concatenate(xs, axis=0) # numpy array to be mutable
@@ -395,3 +402,17 @@ def make_mixture_model(*, key, mixing_rate, n_vars, n_observations, graph_type, 
     
     # Return data sets
     return indicated_x, graphs, thetas, likelihood_model, component_lik_model, graph_model
+
+
+def sample_similar_graphs(*, key, graph_type='er', n_vars=20, n_edges_per_node=2, n_graph_samples=100):
+    if graph_type == 'er':
+        graph_generator = ErdosReniDAGDistribution(n_vars=n_vars, n_edges_per_node=n_edges_per_node)
+    else:
+        graph_generator = ScaleFreeDAGDistribution(n_vars=n_vars, n_edges_per_node=n_edges_per_node)
+        
+    key, *subks = random.split(key, n_graph_samples+1)
+    gs = jnp.array([jnp.array(graph_to_mat(graph_generator.sample_G(subk))) for subk in jnp.array(subks)])
+
+    distances = (1000*jnp.eye(n_graph_samples,n_graph_samples)) + pairwise_structural_hamming_distance(x=gs, y=gs)
+    ind = jnp.unravel_index(jnp.argmin(distances, axis=None), distances.shape)
+    return jnp.array([gs[i] for i in ind])
