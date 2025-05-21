@@ -300,6 +300,30 @@ class MixtureDiBS:
     # Estimators for score d/dZ log p(theta, x | Z)
     # (i.e. w.r.t the latent embeddings Z for graph G)
     #
+    
+    def assignmentwise_grad_z_likelihood(self, x, cs, single_z, single_theta, baseline, t, key, E_k):
+        """
+        Computes batch of estimators for score :math:`\\nabla_Z \\log p(\\Theta, D | Z)`
+        Selects corresponding estimator used for the term :math:`\\nabla_Z E_{p(G|Z)}[ p(\\Theta, D | G) ]`
+        and executes it in batch.
+
+        Args:
+            zs (ndarray): batch of latent tensors :math:`Z` ``[n_particles, d, k, 2]``
+            thetas (Any): batch of parameters PyTree with ``n_particles`` as leading dim
+            baselines (ndarray): array of score function baseline values of shape ``[n_particles, ]``
+
+        Returns:
+            tuple batch of (gradient estimates, baselines) of shapes ``[n_particles, d, k, 2], [n_particles, ]``
+        """
+        n_assignment_samples = cs.shape[0]
+        key, *batch_subk = random.split(key, n_assignment_samples + 1)
+        
+        grad_z_samples, sf_baseline_samples = vmap(self.grad_z_likelihood_gumbel, (None, None, None, None, 0, None, 0, None), (0, 0))(single_z, single_theta,
+                                                                                                                                      baseline, x, cs, t,
+                                                                                                                                      jnp.array(batch_subk), E_k)
+        
+        return grad_z_samples.mean(axis=0), sf_baseline_samples.mean(axis=0)
+    
 
     def eltwise_grad_z_likelihood(self, x, c, zs, thetas, baselines, t, subkeys, E_k):
         """
@@ -396,6 +420,36 @@ class MixtureDiBS:
     # Estimators for score d/dtheta log p(theta, x | Z)
     # (i.e. w.r.t the conditional distribution parameters)
     #
+    
+    def assignmentwise_grad_theta_likelihood(self, x, cs, single_z, single_theta, t, key, E_k):
+        """
+        Computes estimator for the score  :math:`\\nabla_{\\Theta} \\log p(\\Theta, D | Z, C)`,
+        i.e. w.r.t the conditional distribution parameters.
+        Uses the same :math:`G \\sim p(G | Z)` samples for expectations in numerator and denominator.
+        
+        Args:
+            x (ndarray): observations of shape ``[n_observations, d]``
+            cs (ndarray): observation assignments array ``[n_mixture_grad_samples, n_observations]`` 
+            single_z (ndarray): single latent tensor ``[d, k, 2]``
+            single_theta (Any): single parameter PyTree
+            t (int): step
+            key (ndarray): rng key
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
+
+        Returns:
+            gradient in form of ``thetas`` PyTree
+
+        """
+        n_assignment_samples = cs.shape[0]
+        key, *batch_subk = random.split(key, n_assignment_samples + 1)
+        
+        dtheta_sum = jax.tree_util.tree_map(lambda x: 0, single_theta)
+        for subk, c in zip(jnp.array(batch_subk), cs):
+            theta_grad_sample = self.grad_theta_likelihood(single_z, single_theta, x, c, t, subk, E_k)
+            dtheta_sum = jax.tree_util.tree_map(lambda x, y: x+y, dtheta_sum, theta_grad_sample)
+        
+        return jax.tree_util.tree_map(lambda x: x / n_assignment_samples, dtheta_sum)
+    
 
     def eltwise_grad_theta_likelihood(self, x, c, zs, thetas, t, subkeys, E_k):
         """
@@ -408,8 +462,11 @@ class MixtureDiBS:
         Analogous to ``eltwise_grad_z_likelihood`` but gradient w.r.t :math:`\\Theta` instead of :math:`Z`
 
         Args:
+            x (ndarray): observations of shape ``[n_observations, d]``
+            cs (ndarray): observation assignments array ``[n_mixture_grad_samples, n_observations]`` 
             zs (ndarray): batch of latent tensors Z of shape ``[n_particles, d, k, 2]``
             thetas (Any): batch of parameter PyTree with ``n_mc_samples`` as leading dim
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
 
         Returns:
             batch of gradients in form of ``thetas`` PyTree with ``n_particles`` as leading dim
@@ -483,7 +540,7 @@ class MixtureDiBS:
 
 
     #
-    # Estimators for score d/dZ log p(Z) and p(Z | f(D_Psi)) 
+    # Estimators for score d/dZ log p(Z) and d/dZ log p(Z | f(D_Psi)) 
     #
 
     def constraint_gumbel(self, single_z, single_eps, t, E_k):
@@ -613,14 +670,13 @@ class MixtureDiBS:
         
         # elicitation prior term
         if self.elicitation_prior == 'Bin' or self.elicitation_prior:
-            # [d, k, 2], [1,] -> [d, k, 2]
             grad_log_soft_graph_elicitation_prior_particle = grad(self.log_binomial_soft_graph_elicitation_prior_particle, 0)
             # [n_particles, d, k, 2], [1,] -> [n_particles, d, k, 2]
             grad_elicitation_prior_z = vmap(grad_log_soft_graph_elicitation_prior_particle, (0, None, 0), 0)(zs, t, E_k_stack)
-        if self.elicitation_prior is None or not self.elicitation_prior:
+        elif self.elicitation_prior is None or not self.elicitation_prior:
             grad_elicitation_prior_z = jnp.zeros_like(grad_prior_z)
         else:
-            assert True, 'Supply correct specification for elicitation prior (e.g. either elicitation_prior=True or elicitation_prior=False)'
+            raise ValueError(f"Supply correct specification for elicitation prior (e.g. elicitation_prior=True/False). Got: {self.elicitation_prior}")
 
         
         return - self.beta(t) * eltwise_grad_constraint \
