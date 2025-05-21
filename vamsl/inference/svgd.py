@@ -120,7 +120,7 @@ class MixtureJointDiBS(MixtureDiBS):
         self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
         self.parallell_computation = parallell_computation
         
-        # functions for post-hoc likelihood evaluations
+        # functions for post-hoc likelihood evaluations (declared by VaMSL)
         #self.eltwise_log_likelihood_observ = vmap(lambda g, theta, x_ho:
         #    likelihood_model.interventional_log_joint_prob(g, theta, x_ho, jnp.zeros_like(x_ho), None), (0, 0, None), 0)
         #self.eltwise_log_likelihood_interv = vmap(lambda g, theta, x_ho, interv_msk_ho:
@@ -171,7 +171,7 @@ class MixtureJointDiBS(MixtureDiBS):
             n_dim (int): size of latent dimension :math:`k`. Defaults to ``n_vars``, s.t. :math:`k = d`
 
         Returns:
-            batch of latent tensors ``[n_components, n_particles, d, k, 2]``
+            batch of latent tensors ``[n_components, n_particles, d, k, 2s]``
         """
          # default full rank
         if n_dim is None:
@@ -181,12 +181,11 @@ class MixtureJointDiBS(MixtureDiBS):
         key, *batch_subk = random.split(key, n_components+1)
         if linear:
             q_z, q_theta = vmap(self._sample_initial_random_particles, (0, None, None), 0)(jnp.array(batch_subk),
-                                                                                           n_particles,
-                                                                                           n_dim)
+                                                                                           n_particles, n_dim)
         else:
             # non-linear parameters don't support vectorized mapping, replace with list comprehension
             subks = jnp.array(batch_subk)
-            q_z_theta = [(self._sample_initial_random_particles(key, n_particles, n_dim)) for subk in subks]
+            q_z_theta = [(self._sample_initial_random_particles(subk, n_particles, n_dim)) for subk in subks]
             # unpack results
             q_z = jnp.stack([jnp.array(q_z_theta_k[0]) for q_z_theta_k in q_z_theta], axis=0)
             q_theta = [q_z_theta_k[1] for q_z_theta_k in q_z_theta]
@@ -354,7 +353,7 @@ class MixtureJointDiBS(MixtureDiBS):
 
         Args:
             t (int): step
-            c (ndarray): assignments of shape ``[n_observations, 1]``
+            c (ndarray): assignments of shape ``[n_mixture_grad_mc_samples, n_observations]``
             opt_state_z: optimizer state for latent :math:`Z` particles; contains ``[n_particles, d, k, 2]``
             opt_state_theta: optimizer state for parameter :math:`\\Theta` particles;
                 contains PyTree with ``n_particles`` leading dim
@@ -371,31 +370,42 @@ class MixtureJointDiBS(MixtureDiBS):
         
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        if isinstance(theta, jax.Array):
-            dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-            dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
+        if True: #isinstance(theta, jax.Array) and self.parallell_computation:
+            assignmentwise_grad_theta_map = vmap(self.assignmentwise_grad_theta_likelihood, (None, None, 0, 0, None, 0, None))
+            dtheta_log_prob = assignmentwise_grad_theta_map(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
         else:
+            temp_dtheta_log_prob, treedef = [], jax.tree_util.tree_structure(theta)
+            for single_z, single_theta, subk in zip(z, theta, jnp.array(batch_subk)):
+                temp_dtheta_log_prob.append(self.assignmentwise_grad_theta_likelihood(self.x, c, single_z, single_theta, t, subk, E_k))
+            if isinstance(theta, jax.Array):
+                dtheta_log_prob = jnp.array(temp_dtheta_log_prob)
+            else:
+                dtheta_log_prob = jax.tree_util.unflatten(treedef, jax.tree_util.tree_flatten(temp_dtheta_log_prob))
+            """
             # If theta is PyTree, MC averaging needs to be handled through flattening and rebuilding PyTree
             dtheta_log_prob_mc_samples = [self.eltwise_grad_theta_likelihood(self.x, c_s, z, theta, t, jnp.array(batch_subk), E_k) for c_s in c]
             treedef = jax.tree_util.tree_structure(dtheta_log_prob_mc_samples[0])
             sample_vals = [ret[0] for ret in [jax.tree_util.tree_flatten(sample) for sample in dtheta_log_prob_mc_samples]]
             sample_vals_mean = [jnp.array([s[i] for s in sample_vals]).mean(axis=0) for i in range(len(sample_vals[0]))]
             dtheta_log_prob = jax.tree_util.tree_unflatten(treedef, sample_vals_mean)
+            """
             
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        dz_log_likelihood_mc_samples, sf_baseline_mc_samples = vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
-        dz_log_likelihood, sf_baseline = dz_log_likelihood_mc_samples.mean(axis=0), sf_baseline_mc_samples.mean(axis=0)
+        if self.parallell_computation:
+            assignmentwise_grad_z_map = vmap(self.assignmentwise_grad_z_likelihood, (None, None, 0, 0, 0, None, 0, None))
+            dz_log_likelihood, sf_baseline = assignmentwise_grad_z_map(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
+        else:
+            dz_log_likelihood, temp_sf_baseline = [], []
+            for single_z, single_theta, single_sf_baseline, subk in zip(z, theta, sf_baseline, jnp.array(batch_subk)):
+                temp = self.assignmentwise_grad_z_likelihood(self.x, c, single_z, single_theta, single_sf_baseline, t, subk, E_k)
+                dz_log_likelihood.append(temp[0]), temp_sf_baseline.append(temp[1])
+            dz_log_likelihood, sf_baseline = jnp.array(dz_log_likelihood), jnp.array(temp_sf_baseline)
         
-        # d/dz log p(z) (acyclicity)
+        # d/dz log p(z) (acyclicity, numeric stability, random graph structure, and elicitation)
         key, *batch_subk = random.split(key, n_particles + 1)
         dz_log_prior = self.eltwise_grad_latent_prior(z, jnp.array(batch_subk), t, E_k, c, E_k_stack)
         
-        #debug.print('theta lik. :  {x}',x=jnp.absolute(dtheta_log_prob.mean()))
-        #debug.print('Z lik. :  {x}',x=jnp.absolute(dz_log_likelihood.mean()))
-        #debug.print('Z prior :  {x}',x=jnp.absolute(dz_log_prior.mean()))
-        #debug.print('------------------------------------')
-        # d/dz log p(z, theta, D) = d/dz log p(z)  + log p(theta, D | z, c)
         dz_log_prob = dz_log_prior + dz_log_likelihood
         
         # k((z, theta), (z, theta)) for all particles
@@ -469,8 +479,8 @@ class MixtureJointDiBS(MixtureDiBS):
     def _compwise_sample_component(self, t, steps, subkeys, cs, q_z, q_theta, sf_baselines, E, E_stack, linear=True):
         # Vectorized mapping over components only if linear Gaussian and enabled
         if linear and self.parallell_computation:
-            return vmap(self._sample_component, (None, None, 0, 0, 0, 0, 0, 0, 0))(t, steps, subkeys, cs, q_z, 
-                                                                                q_theta, sf_baselines, E, E_stack)
+            return vmap(self._sample_component, (None, None, 0, 0, 0, 0, 0, 0, 0))(t, steps, subkeys, cs, q_z,
+                                                                                   q_theta, sf_baselines, E, E_stack)
         else:
             # non-linear parameters don't support vectorized mapping, replace with inbuilt map
             ts, steps = q_z.shape[0]*[t], q_z.shape[0]*[steps]
