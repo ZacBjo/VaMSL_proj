@@ -218,11 +218,12 @@ class VaMSL(MixtureJointDiBS):
         Samples component assignments based on variational assignment distribution q(c).
 
         Args:
-            key (ndarray): prng key
+            key (ndarray): PRNG key
 
         Returns:
-            one_hot_assignments (ndarray): One hot assignment vectors of shape ``[n_observations, n_components]``
-
+            one_hot_assignments (ndarray): One hot assignment vectors of shape 
+                                           ``[n_components, n_mixture_grad_mc_samples, n_observations]``
+                                           
         """
         n_mixture_grad_mc_samples = self.n_mixture_grad_mc_samples
         # Sample assignments from categorical distribution parametrized by responsibilities
@@ -407,7 +408,7 @@ class VaMSL(MixtureJointDiBS):
         Sets elicitation matrix.
 
         Args:
-            E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
+            E (ndarray): Elicited component-wise hard and soft edge constraints ``[n_components, n_vars, n_vars]`` 
 
         Returns:
             None
@@ -428,21 +429,53 @@ class VaMSL(MixtureJointDiBS):
             None
 
         Returns:
-            E (ndarray): Elicited component-wise hard edge constraints ``[n_components, n_vars, n_vars]`` 
+            E (ndarray): Elicited component-wise hard and soft edge constraints 
+                         of shape ``[n_components, n_vars, n_vars]`` 
 
         """
         return self.E
     
     
     def get_E_particles(self):
+        """
+        Returns elicitation matrix particles used for stochastic prior conditioning.
+
+        Args:
+            None
+
+        Returns:
+            E (ndarray): Elicited component-wise hard and soft edge constraints 
+                         of shape ``[n_components, n_particles, n_vars, n_vars]`` 
+
+        """
         return self.E_particles
     
     
     def set_lamda(self, lamda):
+        """
+        Set informativeness of prior.
+
+        Args:
+            lamda (tuple): parameter defining (alpha_0, beta_0) for eliciation prior.
+
+        Returns:
+            None
+
+        """
         self.lamda = lamda
         
         
     def set_n_mixture_grad_mc_samples(self, n_mixture_grad_mc_samples):
+        """
+        Set number of samples to approximate expected gradient w.r.t. observation assignments.
+
+        Args:
+            n_mixture_grad_mc_samples (int): number of samples to approximate mixture gradient.  
+
+        Returns:
+            None
+
+        """
         self.n_mixture_grad_mc_samples = n_mixture_grad_mc_samples
     
     
@@ -451,10 +484,32 @@ class VaMSL(MixtureJointDiBS):
     #
     
     def hard_constraint_mask(self, probs, E_k):
+        """
+        Mask hard constraints in a given probability matrix with hard constraints
+
+        Args:
+            probs (ndarray): matrix of edge probabilities of shape ``[d, d]``
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
+
+        Returns:
+            masked probs matrix with 0/1 entries as per E_k
+
+        """
         return jnp.where(E_k==1, 1, jnp.where(E_k==0, 0, probs))
     
     
     def hard_constraint_mask_zeros(self, probs, E_k):
+        """
+        Mask hard constraints in a given probability matrix with zeros
+
+        Args:
+            probs (ndarray): matrix of edge probabilities of shape ``[d, d]``
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
+
+        Returns:
+            masked probs matrix with 0 entries as per E_k
+
+        """
         return jnp.where(E_k==1, 0, jnp.where(E_k==0, 0, probs))
     
     
@@ -464,6 +519,7 @@ class VaMSL(MixtureJointDiBS):
 
         Args:
             z (ndarray): latent variables ``[..., d, k, 2]``
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
 
         Returns:
             graph adjacency matrices of shape ``[..., d, d]``
@@ -493,6 +549,7 @@ class VaMSL(MixtureJointDiBS):
             z (ndarray): a single latent tensor :math:`Z` of shape ``[d, k, 2]```
             eps (ndarray): random i.i.d. Logistic(0,1) noise  of shape ``[d, d]``
             t (int): step
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
 
         Returns:
             Gumbel-softmax sample of adjacency matrix [d, d]
@@ -514,6 +571,7 @@ class VaMSL(MixtureJointDiBS):
         Args:
             z (ndarray): latent tensors :math:`Z`  ``[..., d, k, 2]``
             t (int): step
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
 
         Returns:
             edge probabilities of shape ``[..., d, d]``
@@ -534,6 +592,7 @@ class VaMSL(MixtureJointDiBS):
         Args:
             z (ndarray): latent tensors :math:`Z` ``[..., d, k, 2]``
             t (int): step
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
 
         Returns:
             tuple of tensors ``[..., d, d], [..., d, d]`` corresponding to ``log(p)`` and ``log(1-p)``
@@ -556,6 +615,7 @@ class VaMSL(MixtureJointDiBS):
             single_g (ndarray): single graph adjacency matrix ``[d, d]``
             single_z (ndarray): single latent tensor ``[d, k, 2]``
             t (int): step
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
 
         Returns:
             log likelihood :math:`log p(G | Z)` of shape ``[1,]``
@@ -585,6 +645,7 @@ class VaMSL(MixtureJointDiBS):
             gs (ndarray): batch of graph matrices ``[n_graphs, d, d]``
             single_z (ndarray): latent variable ``[d, k, 2]``
             t (int): step
+            E_k (ndarray): elicitation matrix of elicited edge beliefs of shape ``[d, d]``
 
         Returns:
             batch of gradients of shape ``[n_graphs, d, k, 2]``
@@ -657,7 +718,7 @@ class VaMSL(MixtureJointDiBS):
             ground_truth_indicators (ndarray): ndarray of shape [n_observations,] with ground truth component indicators.
 
         Outputs:
-            order (array): array of with order of components
+            order (array): array of with order of components w.r.t. indicator indexing.
         """
         labels = jnp.arange(self.log_q_c.shape[1])
         # Get target and predicited assignments
