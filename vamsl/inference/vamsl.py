@@ -13,7 +13,7 @@ from vamsl.inference import MixtureJointDiBS
 from vamsl.metrics import ParticleDistribution, neg_ave_log_likelihood 
 from vamsl.kernel import AdditiveFrobeniusSEKernel, JointAdditiveFrobeniusSEKernel
 from vamsl.utils.func import stable_softmax
-from vamsl.graph_utils import elwise_acyclic_constr_nograd
+from vamsl.graph_utils import acyclic_constr_nograd
 from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.utils.func import expand_by, zero_diagonal
 from vamsl.models.graph import ElicitationBinomial
@@ -67,7 +67,9 @@ class VaMSL(MixtureJointDiBS):
         self.stochastic_elicitation = stochastic_elicitation
         self.n_particles = n_particles
         self.sf_baselines = sf_baselines
+        self.previous_cs = None
 
+        self.mixture_likelihood_model = mixture_likelihood_model
         self.component_likelihood_model = component_likelihood_model
         # functions for post-hoc likelihood evaluations
         # Likelihood p(x | G, \Theta)
@@ -213,7 +215,7 @@ class VaMSL(MixtureJointDiBS):
     # q(z, \Theta) CAVI update
     #
 
-    def sample_assignments(self, key):
+    def sample_assignments(self, key, samples=None):
         """
         Samples component assignments based on variational assignment distribution q(c).
 
@@ -225,10 +227,11 @@ class VaMSL(MixtureJointDiBS):
                                            ``[n_components, n_mixture_grad_mc_samples, n_observations]``
                                            
         """
-        n_mixture_grad_mc_samples = self.n_mixture_grad_mc_samples
+        if samples is None:
+            samples = self.n_mixture_grad_mc_samples
         # Sample assignments from categorical distribution parametrized by responsibilities
         # [n_mc_grad_samples, n_observations]
-        assignments = random.categorical(key=key, logits=self.log_q_c, shape=(n_mixture_grad_mc_samples, self.log_q_c.shape[0]))
+        assignments = random.categorical(key=key, logits=self.log_q_c, shape=(samples, self.log_q_c.shape[0]))
 
         # Construct matrix of one-hot vectors from sampled assignmnets
         # [n_mixture_grad_mc_samples, n_observations, n_components]
@@ -241,7 +244,7 @@ class VaMSL(MixtureJointDiBS):
         return one_hot_assignments
 
     
-    def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None, linear=True):
+    def update_particle_posteriors(self, *, key, steps, callback=None, callback_every=None, linear=True, t_0=0):
         """
         Optimize particle component particle distributions q(Z_k, \Theta_k).  
 
@@ -260,6 +263,7 @@ class VaMSL(MixtureJointDiBS):
         key, subk = random.split(key)
         # Sample observation assignments
         cs = self.sample_assignments(subk)
+        self.previous_cs = cs # save assignment samples for calculation of responsibilities with soft graphs 
         # Sample new variational posteriors for graphs and parameters
         self.q_z, self.q_theta, self.sf_baselines = self.sample(key=key, 
                                                                 n_particles=self.n_particles, 
@@ -272,7 +276,8 @@ class VaMSL(MixtureJointDiBS):
                                                                 init_sf_baselines=self.sf_baselines,
                                                                 E=self.E,
                                                                 E_stack=self.E_particles,
-                                                                linear=linear)
+                                                                linear=linear,
+                                                                t_0=t_0)
 
     
     #
@@ -294,7 +299,7 @@ class VaMSL(MixtureJointDiBS):
         
 
     #
-    # q(c) CAVI update
+    # q(c) CAVI update (hard graphs)
     #
     
     def compute_log_responsibility(self, x_n, dist_k, pi_k):
@@ -321,7 +326,7 @@ class VaMSL(MixtureJointDiBS):
         
     def compute_log_responsibilities(self, *, x):
         """
-        CAVI updates for variational assigment and mixing weight distributions.
+        CAVI updates for variational assignment distribution.
 
         Args:
             x (ndarray): N new observations of shape ```[N, n_vars]```
@@ -348,7 +353,7 @@ class VaMSL(MixtureJointDiBS):
         
         return log_responsibilities
     
-    
+
     def update_responsibilities_and_weights(self):
         """
         CAVI updates for variational assigment and mixing weight distributions.
@@ -363,6 +368,135 @@ class VaMSL(MixtureJointDiBS):
         """                    
         # Update variational distributions for responsibilities and mixing weights 
         self.log_q_c =  self.compute_log_responsibilities(x=self.x)
+        self.update_mixing_weigths()
+    
+    
+    #
+    # q(c) CAVI update (soft graphs)
+    #
+    
+    
+    def compute_particle_log_responsibility_with_hard_graph(self, x_n, single_z, ep, single_theta, cs_k, E_k, t):
+        # sample hard graph and mask cyclic graphs with empty graphs 
+        single_g = jax.lax.cond(acyclic_constr_nograd(g, g.shape[0]) > 0,
+                                lambda g: jnp.zeros((g.shape[0], g.shape[0]), dtype=g.dtype),
+                                lambda g: g,
+                                self.particle_to_hard_graph(single_z, ep, t, E_k))
+        
+        log_mixture_likelihood = lambda g, t, c: self.mixture_likelihood_model.log_likelihood(g=g, theta=t, x=self.x, c=c, interv_targets=jnp.zeros_like(self.x))
+        log_parameter_likelihood = lambda g, t: self.mixture_likelihood_model.log_prob_parameters(g=g, theta=t)
+        log_likelihood = lambda g, t, x_n: self.component_likelihood_model.log_likelihood(g=g, theta=t, x=x_n, interv_targets=jnp.zeros_like(x_n))
+        
+        #return log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta), 0
+    
+        #denominator_mc_samples = vmap(log_mixture_likelihood, (None, None, 0))(single_g, single_theta, cs_k)
+        #denominator = logsumexp(a=denominator_mc_samples, b=1/denominator_mc_samples.shape[0]) + log_parameter_likelihood(single_g, single_theta)
+        denominator = log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta)
+        numerator = denominator + log_likelihood(single_g, single_theta, x_n)
+        
+        return log_likelihood(single_g, single_theta, x_n), log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta)
+        return numerator, denominator
+    
+    
+    def compute_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t, n_responsibility_mc_samples=32):
+        # [n_mc_samples, d, d]
+        eps = random.logistic(key, shape=(n_responsibility_mc_samples, single_z.shape[0], single_z.shape[0]))
+        #gs = vmap(self.particle_to_hard_graph, (None, 0, None, None))(single_z, eps, t, E_k)
+        
+        # mask cyclic graph samples with no empty graphs (sparsity assumption) 
+        #def cyclic_mask(g): 
+        #    return jax.lax.cond(acyclic_constr_nograd(g, g.shape[0]) > 0,
+        #                        lambda g: jnp.zeros((g.shape[0], g.shape[0]), dtype=g.dtype),
+        #                        lambda g: g,
+        #                        g)
+        #gs = vmap(cyclic_mask, (0))(gs)
+        
+        # [n_responsibility_mc_samples,], [n_responsibility_mc_samples,]
+        mc_samples_log_probs = [self.compute_particle_log_responsibility_with_hard_graph(x_n, single_z, ep, single_theta, cs_k, E_k, t) for ep in eps]
+        mc_samples_log_likelihood = jnp.array([sample[0] for sample in mc_samples_log_probs])
+        mc_samples_log_joint_prob = jnp.array([sample[1] for sample in mc_samples_log_probs])
+        #mc_samples_log_likelihood, mc_samples_log_joint_prob = vmap(self.compute_particle_log_responsibility_with_hard_graph,
+        #                                                            (None, 0, None, None, None, None))(x_n, gs, single_theta, cs_k, E_k, t)
+    
+        # compute MC averages using logsumexp and fraction
+        expmeanlogprob = lambda x, logprob: logsumexp(a=x, b=logprob/n_responsibility_mc_samples, return_sign=True)[0]
+        expmean = lambda x: logsumexp(a=x, b=1/n_responsibility_mc_samples, return_sign=True)[0]
+        
+        expected_numerator = expmeanlogprob(mc_samples_log_joint_prob, mc_samples_log_likelihood)
+        log_expected_denominator = expmean(mc_samples_log_joint_prob)
+        
+        #debug.print('exp numerator: {x}',x=expected_numerator)
+        #debug.print('log_expected_denominator: {x}',x=log_expected_denominator)
+        #debug.print('div: {x}',x=expected_numerator - log_expected_denominator)
+        
+        # [1,]
+        return -1.0 * jnp.exp(expected_numerator - log_expected_denominator)
+        return jnp.power(-jnp.exp(logsumexp(a=log_expected_denominator, b=jnp.power(expected_numerator, -1), return_sign=True)[0]), -1)
+        # [1,]
+        mc_sample_expected_log_lik = expmean(mc_samples_log_numerator) - expmean(mc_samples_log_denominator)
+                                                      
+        return mc_sample_expected_log_lik
+    
+    
+    def compute_assignmentwise_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t):
+        key, *batch_subk = random.split(key, cs_k.shape[0]+1)
+        #assignmentwise_particle_log_responsibility = vmap(self.compute_particle_log_responsibility_with_soft_graph,
+        #                                                  (None, None, None, 0, None, 0, None))(x_n, single_z, single_theta, cs_k, 
+        #                                                                                        E_k, jnp.array(batch_subk), t)
+        assignmentwise_particle_log_responsibility = [self.compute_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k_i, E_k, subk, t) for cs_k_i, subk in zip(cs_k,jnp.array(batch_subk))] 
+        
+        return jnp.array(assignmentwise_particle_log_responsibility).mean()
+        
+    def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t):
+        key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
+        #component_log_responsibility_mc_samples =  vmap(self.compute_particle_log_responsibility_with_soft_graph, 
+        #                                                (None, 0, 0, 0, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
+        component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph, 
+                                                        (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
+        component_log_responsibility = component_log_responsibility_mc_samples.mean()
+        
+        return component_log_responsibility + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
+    
+    
+    def compute_normalized_log_responsibilities_with_soft_graphs(self, x_n, n_index, q_z, q_theta, q_pi, E, key, t, linear=True):
+        # Sample observation assignments
+        key, subk = random.split(key)
+        samples = self.n_mixture_grad_mc_samples
+        #samples = self.n_particles
+        cs = self.sample_assignments(subk, samples=samples)
+        key, *batch_subk = random.split(key, q_z.shape[0]+1)
+        if linear:
+            unnorm_responsibilities = vmap(self.compute_component_log_responsibility_with_soft_graphs, 
+                                           (None, 0, 0, 0, 0, 0, 0, None))(x_n, q_z, q_theta, cs, q_pi, E, jnp.array(batch_subk), t)
+        else:
+            unnorm_responsibilities = [self.compute_component_log_responsibility_with_soft_graphs(x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, subk, t) for q_z_k, q_theta_k, cs_k, pi_k, E_k, subk in zip(q_z, q_theta, cs, q_pi, E, jnp.array(batch_subk))]
+            unnorm_responsibilities = jnp.array(unnorm_responsibilities)
+        
+        return unnorm_responsibilities - logsumexp(unnorm_responsibilities)
+    
+    
+    def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True):
+        key, *batch_subk = random.split(key, x.shape[0]+1)
+        
+        return vmap(self.compute_normalized_log_responsibilities_with_soft_graphs, 
+                    (0, 0, None, None, None, None, 0, None, None))(x, jnp.arange(x.shape[0]), self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
+        
+
+    def update_responsibilities_with_soft_graphs_and_weights(self, t, key, linear=True):
+        """
+        CAVI updates for variational assigments and mixing weight distributions, where responsibilities
+        are computed using latent graph embeddings.
+        Responsibilities and weights are updated together to avoid going out of sync. 
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        """                    
+        # Update variational distributions for responsibilities and mixing weights 
+        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear)
         self.update_mixing_weigths()
     
     #
@@ -561,6 +695,27 @@ class VaMSL(MixtureJointDiBS):
 
         # mask diagonal since it is explicitly not modeled
         return zero_diagonal(soft_graph)
+    
+
+    def particle_to_hard_graph(self, z, eps, t, E_k):
+        """
+        Bernoulli sample of :math:`G` using probabilities implied by latent ``z``
+
+        Args:
+            z (ndarray): a single latent tensor :math:`Z` of shape ``[d, k, 2]``
+            eps (ndarray): random i.i.d. Logistic(0,1) noise  of shape ``[d, d]``
+            t (int): step
+
+        Returns:
+            Gumbel-max (hard) sample of adjacency matrix ``[d, d]``
+        """
+        scores = jnp.einsum('...ik,...jk->...ij', z[..., 0], z[..., 1])
+
+        # simply take hard limit of sigmoid in gumbel-softmax/concrete distribution
+        hard_graph = self.hard_constraint_mask(((eps + self.alpha(t) * scores) > 0.0).astype(jnp.float32), E_k)
+
+        # mask diagonal since it is explicitly not modeled
+        return zero_diagonal(hard_graph)
 
     
     #@override
