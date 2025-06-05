@@ -370,37 +370,13 @@ class MixtureJointDiBS(MixtureDiBS):
         
         # d/dtheta log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        if True: #isinstance(theta, jax.Array) and self.parallell_computation:
-            assignmentwise_grad_theta_map = vmap(self.assignmentwise_grad_theta_likelihood, (None, None, 0, 0, None, 0, None))
-            dtheta_log_prob = assignmentwise_grad_theta_map(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-        else:
-            temp_dtheta_log_prob, treedef = [], jax.tree_util.tree_structure(theta)
-            for single_z, single_theta, subk in zip(z, theta, jnp.array(batch_subk)):
-                temp_dtheta_log_prob.append(self.assignmentwise_grad_theta_likelihood(self.x, c, single_z, single_theta, t, subk, E_k))
-            if isinstance(theta, jax.Array):
-                dtheta_log_prob = jnp.array(temp_dtheta_log_prob)
-            else:
-                dtheta_log_prob = jax.tree_util.unflatten(treedef, jax.tree_util.tree_flatten(temp_dtheta_log_prob))
-            """
-            # If theta is PyTree, MC averaging needs to be handled through flattening and rebuilding PyTree
-            dtheta_log_prob_mc_samples = [self.eltwise_grad_theta_likelihood(self.x, c_s, z, theta, t, jnp.array(batch_subk), E_k) for c_s in c]
-            treedef = jax.tree_util.tree_structure(dtheta_log_prob_mc_samples[0])
-            sample_vals = [ret[0] for ret in [jax.tree_util.tree_flatten(sample) for sample in dtheta_log_prob_mc_samples]]
-            sample_vals_mean = [jnp.array([s[i] for s in sample_vals]).mean(axis=0) for i in range(len(sample_vals[0]))]
-            dtheta_log_prob = jax.tree_util.tree_unflatten(treedef, sample_vals_mean)
-            """
+        assignmentwise_grad_theta_map = vmap(self.assignmentwise_grad_theta_likelihood, (None, None, 0, 0, None, 0, None))
+        dtheta_log_prob = assignmentwise_grad_theta_map(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
             
         # d/dz log p(theta, D | z)
         key, *batch_subk = random.split(key, n_particles + 1)
-        if self.parallell_computation:
-            assignmentwise_grad_z_map = vmap(self.assignmentwise_grad_z_likelihood, (None, None, 0, 0, 0, None, 0, None))
-            dz_log_likelihood, sf_baseline = assignmentwise_grad_z_map(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
-        else:
-            dz_log_likelihood, temp_sf_baseline = [], []
-            for single_z, single_theta, single_sf_baseline, subk in zip(z, theta, sf_baseline, jnp.array(batch_subk)):
-                temp = self.assignmentwise_grad_z_likelihood(self.x, c, single_z, single_theta, single_sf_baseline, t, subk, E_k)
-                dz_log_likelihood.append(temp[0]), temp_sf_baseline.append(temp[1])
-            dz_log_likelihood, sf_baseline = jnp.array(dz_log_likelihood), jnp.array(temp_sf_baseline)
+        assignmentwise_grad_z_map = vmap(self.assignmentwise_grad_z_likelihood, (None, None, 0, 0, 0, None, 0, None))
+        dz_log_likelihood, sf_baseline = assignmentwise_grad_z_map(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
         
         # d/dz log p(z) (acyclicity, numeric stability, random graph structure, and elicitation)
         key, *batch_subk = random.split(key, n_particles + 1)
@@ -494,7 +470,7 @@ class MixtureJointDiBS(MixtureDiBS):
     
     
     def sample(self, *, key, n_particles, steps, n_dim_particles=None, callback=None, callback_every=None,
-               cs, init_q_z, init_q_theta, init_sf_baselines, E, E_stack, linear=True):
+               cs, init_q_z, init_q_theta, init_sf_baselines, E, E_stack, linear=True, t_0=0):
         """
         Use SVGD with VaMSL to sample ``[n_components, n_particles]`` particles.
 
@@ -521,7 +497,7 @@ class MixtureJointDiBS(MixtureDiBS):
         
         # perform sequence of SVGD steps for each component
         callback_every = callback_every or steps
-        for t in (range(0, steps, callback_every) if steps else range(0)):
+        for t in (range(t_0, steps+t_0, callback_every) if steps else range(0)):
             key, *batch_subk = random.split(key, n_components+1)
             q_z, q_theta, sf_baselines = self._compwise_sample_component(t, callback_every,
                                                                          subkeys=jnp.array(batch_subk),
