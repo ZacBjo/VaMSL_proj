@@ -377,44 +377,27 @@ class VaMSL(MixtureJointDiBS):
     
     
     def compute_particle_log_responsibility_with_hard_graph(self, x_n, single_z, ep, single_theta, cs_k, E_k, t):
-        #def cyclic_mask(g): 
-        #    return jax.lax.cond(acyclic_constr_nograd(g, g.shape[0]) > 0,
-        #                        lambda g: jnp.zeros((g.shape[0], g.shape[0]), dtype=g.dtype),
-        #                        lambda g: g,
-        #                        g)
+        def cyclic_mask(g): 
+            return jax.lax.cond(acyclic_constr_nograd(g, g.shape[0]) > 0,
+                                lambda g: jnp.zeros((g.shape[0], g.shape[0]), dtype=g.dtype),
+                                lambda g: g,
+                                g)
         # sample hard graph and mask cyclic graphs with empty graphs 
-        #single_g = cyclic_mask(self.particle_to_hard_graph(single_z, ep, t, E_k))
-        g, empty_g = self.particle_to_hard_graph(single_z, ep, t, E_k), jnp.zeros((single_z.shape[0], single_z.shape[0]), dtype=single_z.dtype)
-        g_is_cyclic = acyclic_constr_nograd(g, g.shape[0]) > 0
-        single_g = jnp.select([g_is_cyclic, jnp.logical_not(g_is_cyclic)], [empty_g, g], default=0)
+        single_g = cyclic_mask(self.particle_to_hard_graph(single_z, ep, t, E_k))
+        #g, empty_g = self.particle_to_hard_graph(single_z, ep, t, E_k), jnp.zeros((single_z.shape[0], single_z.shape[0]), dtype=single_z.dtype)
+        #g_is_cyclic = acyclic_constr_nograd(g, g.shape[0]) > 0
+        #single_g = jnp.select([g_is_cyclic, jnp.logical_not(g_is_cyclic)], [empty_g, g], default=0)
         
         log_mixture_likelihood = lambda g, t, c: self.mixture_likelihood_model.log_likelihood(g=g, theta=t, x=self.x, c=c, interv_targets=jnp.zeros_like(self.x))
         log_parameter_likelihood = lambda g, t: self.mixture_likelihood_model.log_prob_parameters(g=g, theta=t)
         log_likelihood = lambda g, t, x_n: self.component_likelihood_model.log_likelihood(g=g, theta=t, x=x_n, interv_targets=jnp.zeros_like(x_n))
         
-        #return log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta), 0
-    
-        #denominator_mc_samples = vmap(log_mixture_likelihood, (None, None, 0))(single_g, single_theta, cs_k)
-        #denominator = logsumexp(a=denominator_mc_samples, b=1/denominator_mc_samples.shape[0]) + log_parameter_likelihood(single_g, single_theta)
-        denominator = log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta)
-        numerator = denominator + log_likelihood(single_g, single_theta, x_n)
-        
         return log_likelihood(single_g, single_theta, x_n), log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta)
-        return numerator, denominator
     
     
     def compute_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t, n_responsibility_mc_samples=32):
-        # [n_mc_samples, d, d]
+        # [n_responsibility_mc_samples, d, d]
         eps = random.logistic(key, shape=(n_responsibility_mc_samples, single_z.shape[0], single_z.shape[0]))
-        #gs = vmap(self.particle_to_hard_graph, (None, 0, None, None))(single_z, eps, t, E_k)
-        
-        # mask cyclic graph samples with no empty graphs (sparsity assumption) 
-        #def cyclic_mask(g): 
-        #    return jax.lax.cond(acyclic_constr_nograd(g, g.shape[0]) > 0,
-        #                        lambda g: jnp.zeros((g.shape[0], g.shape[0]), dtype=g.dtype),
-        #                        lambda g: g, 
-        #                        g)
-        #gs = vmap(cyclic_mask, (0))(gs)
         
         # [n_responsibility_mc_samples,], [n_responsibility_mc_samples,]
         mc_samples_log_likelihood, mc_samples_log_joint_prob = vmap(self.compute_particle_log_responsibility_with_hard_graph,
@@ -427,17 +410,8 @@ class VaMSL(MixtureJointDiBS):
         expected_numerator = expmeanlogprob(mc_samples_log_joint_prob, mc_samples_log_likelihood)
         log_expected_denominator = expmean(mc_samples_log_joint_prob)
         
-        #debug.print('exp numerator: {x}',x=expected_numerator)
-        #debug.print('log_expected_denominator: {x}',x=log_expected_denominator)
-        #debug.print('div: {x}',x=expected_numerator - log_expected_denominator)
-        
         # [1,]
         return -1.0 * jnp.exp(expected_numerator - log_expected_denominator)
-        return jnp.power(-jnp.exp(logsumexp(a=log_expected_denominator, b=jnp.power(expected_numerator, -1), return_sign=True)[0]), -1)
-        # [1,]
-        mc_sample_expected_log_lik = expmean(mc_samples_log_numerator) - expmean(mc_samples_log_denominator)
-                                                      
-        return mc_sample_expected_log_lik
     
     
     def compute_assignmentwise_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t):
@@ -451,15 +425,10 @@ class VaMSL(MixtureJointDiBS):
         
     def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t, linear=True):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
-        if linear:
-            component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph, 
-                                                            (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
-        else:
-            component_log_responsibility_mc_samples =  jnp.array([self.compute_assignmentwise_particle_log_responsibility_with_soft_graph(x_n, q_z_k_p, q_theta_k_p, cs_k, E_k, subk, t) for q_z_k_p, q_theta_k_p, subk in zip(q_z_k, q_theta_k, jnp.array(batch_subk))])
+        component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
+                                                        (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
         
-        component_log_responsibility = component_log_responsibility_mc_samples.mean()
-        
-        return component_log_responsibility + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
+        return component_log_responsibility_mc_samples.mean() + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
     
     
     def compute_normalized_log_responsibilities_with_soft_graphs(self, x_n, q_z, q_theta, q_pi, E, key, t, linear=True):
@@ -467,15 +436,17 @@ class VaMSL(MixtureJointDiBS):
         key, subk = random.split(key)
         cs = self.sample_assignments(subk, samples=self.n_mixture_grad_mc_samples)
         key, *batch_subk = random.split(key, q_z.shape[0]+1)
-        unnorm_responsibilities = vmap(self.compute_component_log_responsibility_with_soft_graphs,
-                                       (None, 0, 0, 0, 0, 0, 0, None, None))(x_n, q_z, q_theta, cs, q_pi, E, jnp.array(batch_subk), t, linear)
+        if linear:
+            unnorm_responsibilities = vmap(self.compute_component_log_responsibility_with_soft_graphs,
+                                           (None, 0, 0, 0, 0, 0, 0, None, None))(x_n, q_z, jnp.array(q_theta), cs, q_pi, E, jnp.array(batch_subk), t, linear)
+        else:
+            unnorm_responsibilities = jnp.array([self.compute_component_log_responsibility_with_soft_graphs(x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, subk, t, linear) for q_z_k, q_theta_k, cs_k, pi_k, E_k, subk in zip(q_z, q_theta, cs, q_pi, E, jnp.array(batch_subk))])
         
         return unnorm_responsibilities - logsumexp(unnorm_responsibilities)
     
     
     def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True):
         key, *batch_subk = random.split(key, x.shape[0]+1)
-        
         if self.parallell_computation:
             log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs,
                                         (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
