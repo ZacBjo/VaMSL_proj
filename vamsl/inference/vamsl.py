@@ -377,13 +377,16 @@ class VaMSL(MixtureJointDiBS):
     
     
     def compute_particle_log_responsibility_with_hard_graph(self, x_n, single_z, ep, single_theta, cs_k, E_k, t):
-        def cyclic_mask(g): 
-            return jax.lax.cond(acyclic_constr_nograd(g, g.shape[0]) > 0,
-                                lambda g: jnp.zeros((g.shape[0], g.shape[0]), dtype=g.dtype),
-                                lambda g: g,
-                                g)
+        #def cyclic_mask(g): 
+        #    return jax.lax.cond(acyclic_constr_nograd(g, g.shape[0]) > 0,
+        #                        lambda g: jnp.zeros((g.shape[0], g.shape[0]), dtype=g.dtype),
+        #                        lambda g: g,
+        #                        g)
         # sample hard graph and mask cyclic graphs with empty graphs 
-        single_g = cyclic_mask(self.particle_to_hard_graph(single_z, ep, t, E_k))
+        #single_g = cyclic_mask(self.particle_to_hard_graph(single_z, ep, t, E_k))
+        g, empty_g = self.particle_to_hard_graph(single_z, ep, t, E_k), jnp.zeros((single_z.shape[0], single_z.shape[0]), dtype=single_z.dtype)
+        g_is_cyclic = acyclic_constr_nograd(g, g.shape[0]) > 0
+        single_g = jnp.select([g_is_cyclic, jnp.logical_not(g_is_cyclic)], [empty_g, g], default=0)
         
         log_mixture_likelihood = lambda g, t, c: self.mixture_likelihood_model.log_likelihood(g=g, theta=t, x=self.x, c=c, interv_targets=jnp.zeros_like(self.x))
         log_parameter_likelihood = lambda g, t: self.mixture_likelihood_model.log_prob_parameters(g=g, theta=t)
