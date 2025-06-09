@@ -368,33 +368,16 @@ class MixtureJointDiBS(MixtureDiBS):
         theta = self.get_params(opt_state_theta)  # PyTree with `n_particles` leading dim
         n_particles = z.shape[0]
         
-        if False:#self.parallell_computation:
-            # d/dtheta log p(theta, D | z)
-            key, *batch_subk = random.split(key, n_particles + 1)
-            if isinstance(theta, jax.Array):
-                dtheta_log_prob_mc_samples = vmap(self.eltwise_grad_theta_likelihood, (None, 0, None, None, None, None, None))(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-                dtheta_log_prob = dtheta_log_prob_mc_samples.mean(axis=0)
-            else:
-                # If theta is PyTree, MC averaging needs to be handled through flattening and rebuilding PyTree
-                dtheta_log_prob_mc_samples = [self.eltwise_grad_theta_likelihood(self.x, c_s, z, theta, t, jnp.array(batch_subk), E_k) for c_s in c]
-                treedef = jax.tree_util.tree_structure(dtheta_log_prob_mc_samples[0])
-                sample_vals = [ret[0] for ret in [jax.tree_util.tree_flatten(sample) for sample in dtheta_log_prob_mc_samples]]
-                sample_vals_mean = [jnp.array([s[i] for s in sample_vals]).mean(axis=0) for i in range(len(sample_vals[0]))]
-                dtheta_log_prob = jax.tree_util.tree_unflatten(treedef, sample_vals_mean)
-            # d/dz log p(theta, D | z)
-            key, *batch_subk = random.split(key, n_particles + 1)
-            dz_log_likelihood_mc_samples, sf_baseline_mc_samples = vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
-            dz_log_likelihood, sf_baseline = dz_log_likelihood_mc_samples.mean(axis=0), sf_baseline_mc_samples.mean(axis=0)
-        else:
-            # if not parallell computation, compute gradients assignmentwise to reduce memory requirements
-            # d/dtheta log p(theta, D | z)
-            key, *batch_subk = random.split(key, n_particles + 1)
-            assignmentwise_grad_theta_map = vmap(self.assignmentwise_grad_theta_likelihood, (None, None, 0, 0, None, 0, None))
-            dtheta_log_prob = assignmentwise_grad_theta_map(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-            # d/dz log p(theta, D | z)
-            key, *batch_subk = random.split(key, n_particles + 1)
-            assignmentwise_grad_z_map = vmap(self.assignmentwise_grad_z_likelihood, (None, None, 0, 0, 0, None, 0, None))
-            dz_log_likelihood, sf_baseline = assignmentwise_grad_z_map(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
+        # if not parallell computation, compute gradients assignmentwise to reduce memory requirements
+        # d/dtheta log p(theta, D | z)
+        key, *batch_subk = random.split(key, n_particles + 1)
+        assignmentwise_grad_theta_map = vmap(self.assignmentwise_grad_theta_likelihood, (None, None, 0, 0, None, 0, None))
+        dtheta_log_prob = assignmentwise_grad_theta_map(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
+        
+        # d/dz log p(theta, D | z)
+        key, *batch_subk = random.split(key, n_particles + 1)
+        assignmentwise_grad_z_map = vmap(self.assignmentwise_grad_z_likelihood, (None, None, 0, 0, 0, None, 0, None))
+        dz_log_likelihood, sf_baseline = assignmentwise_grad_z_map(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
         
         # d/dz log p(z) (acyclicity, numeric stability, random graph structure, and elicitation)
         key, *batch_subk = random.split(key, n_particles + 1)
