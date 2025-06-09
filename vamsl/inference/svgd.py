@@ -369,6 +369,7 @@ class MixtureJointDiBS(MixtureDiBS):
         n_particles = z.shape[0]
         
         if self.parallell_computation:
+            debug.print('{x}'x='Computing parameter gradient (parallell).')
             # d/dtheta log p(theta, D | z)
             key, *batch_subk = random.split(key, n_particles + 1)
             if isinstance(theta, jax.Array):
@@ -381,18 +382,19 @@ class MixtureJointDiBS(MixtureDiBS):
                 sample_vals = [ret[0] for ret in [jax.tree_util.tree_flatten(sample) for sample in dtheta_log_prob_mc_samples]]
                 sample_vals_mean = [jnp.array([s[i] for s in sample_vals]).mean(axis=0) for i in range(len(sample_vals[0]))]
                 dtheta_log_prob = jax.tree_util.tree_unflatten(treedef, sample_vals_mean)
-            
+            debug.print('{x}'x='Computing graph gradient (parallell).')
             # d/dz log p(theta, D | z)
             key, *batch_subk = random.split(key, n_particles + 1)
             dz_log_likelihood_mc_samples, sf_baseline_mc_samples = vmap(self.eltwise_grad_z_likelihood, (None, 0, None, None, None, None, None, None))(self.x, c, z, theta, sf_baseline, t, jnp.array(batch_subk), E_k)
             dz_log_likelihood, sf_baseline = dz_log_likelihood_mc_samples.mean(axis=0), sf_baseline_mc_samples.mean(axis=0)
         else:
+            debug.print('{x}'x='Computing parameter gradient (nonparallell).')
             # if not parallell computation, compute gradients assignmentwise to reduce memory requirements
             # d/dtheta log p(theta, D | z)
             key, *batch_subk = random.split(key, n_particles + 1)
             assignmentwise_grad_theta_map = vmap(self.assignmentwise_grad_theta_likelihood, (None, None, 0, 0, None, 0, None))
             dtheta_log_prob = assignmentwise_grad_theta_map(self.x, c, z, theta, t, jnp.array(batch_subk), E_k)
-
+            debug.print('{x}'x='Computing graph gradient (nonparallell).')
             # d/dz log p(theta, D | z)
             key, *batch_subk = random.split(key, n_particles + 1)
             assignmentwise_grad_z_map = vmap(self.assignmentwise_grad_z_likelihood, (None, None, 0, 0, 0, None, 0, None))
