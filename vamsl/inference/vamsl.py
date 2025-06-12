@@ -439,7 +439,7 @@ class VaMSL(MixtureJointDiBS):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
         if self.parallell_computation:
             component_log_responsibility_mc_samples =  vmap(self.compute_particle_log_responsibility_with_soft_graph,
-                                                                (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
+                                                                (None, 0, 0, 0, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
         else:
             if not linear:
                 # unstack parameter jax pytree for list comprehension, see: https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
