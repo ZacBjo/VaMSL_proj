@@ -18,6 +18,7 @@ from vamsl.utils.tree import tree_mul, tree_select
 from vamsl.utils.func import expand_by, zero_diagonal
 from vamsl.models.graph import ElicitationBinomial
 
+from jax._src import core
 from jax import debug
 
 from vamsl.metrics import expected_log_likelihood
@@ -51,7 +52,7 @@ class VaMSL(MixtureJointDiBS):
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
-                 n_responsibility_mc_samples=32,
+                 n_responsibility_mc_samples=16,
                  stochastic_elicitation=False,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
@@ -465,16 +466,16 @@ class VaMSL(MixtureJointDiBS):
     
     def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True, batch_size=None):
         key, *batch_subk = random.split(key, x.shape[0]+1)
-        #if self.parallell_computation:
-        #    log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs, (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
-        #else:
-        #    log_responsibilities = jnp.array([self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear) for x_n, subk in zip(x, jnp.array(batch_subk))])
+        if self.parallell_computation:
+            log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs, (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
+        else:
+            log_responsibilities = jnp.array([self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear) for x_n, subk in zip(x, jnp.array(batch_subk))])
         
-        if batch_size is None:
-            batch_size = x.shape[0] if self.parallell_computation else 1
-        
-        get_single_log_resp = lambda x_n: self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear)
-        log_responsibilities = jax.lax.map(get_single_log_resp, x, batch_size=batch_size)
+        #if batch_size is None:
+        #    batch_size = x.shape[0] if self.parallell_computation else 1
+        #
+        #get_single_log_resp = lambda x_n: self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear)
+        #log_responsibilities = self.jax_map(get_single_log_resp, x, batch_size=batch_size)
             
         return log_responsibilities
         
@@ -1067,6 +1068,101 @@ class VaMSL(MixtureJointDiBS):
 
         # Return list of optimal allocations as order of components
         return indexes[1]
-    
+
+
+    def jax_map(self, f, xs, *, batch_size: int | None = None):
+      """Map a function over leading array axes.
+
+      Like Python's builtin map, except inputs and outputs are in the form of
+      stacked arrays. Consider using the :func:`~jax.vmap` transform instead, unless you
+      need to apply a function element by element for reduced memory usage or
+      heterogeneous computation with other control flow primitives.
+
+      When ``xs`` is an array type, the semantics of :func:`~map` are given by this
+      Python implementation::
+
+        def map(f, xs):
+          return np.stack([f(x) for x in xs])
+
+      Like :func:`~scan`, :func:`~map` is implemented in terms of JAX primitives so
+      many of the same advantages over a Python loop apply: ``xs`` may be an
+      arbitrary nested pytree type, and the mapped computation is compiled only
+      once.
+
+      If ``batch_size`` is provided, the computation is executed in batches of that size
+      and parallelized using :func:`~jax.vmap`. This can be used as either a more performant
+      version of ``map`` or as a memory-efficient version of ``vmap``. If the axis is not
+      divisible by the batch size, the remainder is processed in a separate ``vmap`` and
+      concatenated to the result.
+
+        >>> x = jnp.ones((10, 3, 4))
+        >>> def f(x):
+        ...   print('inner shape:', x.shape)
+        ...   return x + 1
+        >>> y = lax.map(f, x, batch_size=3)
+        inner shape: (3, 4)
+        inner shape: (3, 4)
+        >>> y.shape
+        (10, 3, 4)
+
+      In the example above, "inner shape" is printed twice, once while tracing the batched
+      computation and once while tracing the remainder computation.
+
+      Args:
+        f: a Python function to apply element-wise over the first axis or axes of
+          ``xs``.
+        xs: values over which to map along the leading axis.
+        batch_size: (optional) integer specifying the size of the batch for each step to execute
+          in parallel.
+
+      Returns:
+        Mapped values.
+      """
+      if batch_size is not None: 
+        def _scan_leaf(leaf, batch_elems, num_batches, batch_size):
+          def f(l):
+            return l[:batch_elems].reshape(num_batches, batch_size, *leaf.shape[1:])
+
+          aval = jax._src.get_aval(leaf)
+          if aval.sharding.spec[0] is not None:
+            raise ValueError(
+                '0th dimension of leaf passed to `jax.lax.map` should be replicated.'
+                f' Got {aval.str_short(True, True)}')
+          if jax._src.mesh.get_abstract_mesh()._are_all_axes_explicit:
+            out_s = aval.sharding.with_spec(P(None, None, *aval.sharding.spec[1:]))
+            return jax._src.pjit.auto_axes(f, out_sharding=out_s)(leaf)
+          return f(leaf)    
+        
+        def _batch_and_remainder(x, batch_size: int):
+          leaves, treedef = jax.tree_util.tree_flatten(x)
+          if not leaves:
+            return x, None
+          num_batches, remainder = divmod(leaves[0].shape[0], batch_size)
+          batch_elems = num_batches * batch_size
+          if remainder:
+            scan_leaves, remainder_leaves = jax._src.util.unzip2(
+                [(_scan_leaf(leaf, batch_elems, num_batches, batch_size),
+                  _remainder_leaf(leaf, batch_elems)) for leaf in leaves])
+            return treedef.unflatten(scan_leaves), treedef.unflatten(remainder_leaves)
+          else:
+            scan_leaves = tuple(_scan_leaf(leaf, batch_elems, num_batches, batch_size)
+                                for leaf in leaves)
+            return treedef.unflatten(scan_leaves), None
+        
+        scan_xs, remainder_xs = _batch_and_remainder(xs, batch_size)
+        g = lambda _, x: ((), jax.vmap(f)(x))
+        _, scan_ys = scan(g, (), scan_xs)
+        flatten = lambda x: x.reshape(-1, *x.shape[2:])
+        if remainder_xs is not None:
+          remainder_ys = jax.vmap(f)(remainder_xs)
+          ys = jax.tree_util.tree_map(
+            lambda x, y: jax.lax.concatenate([flatten(x), y], dimension=0), scan_ys,
+            remainder_ys)
+        else:
+          ys = jax.tree_util.tree_map(flatten, scan_ys)
+      else:
+        g = lambda _, x: ((), f(x))
+        _, ys = jax.lax.scan(g, (), xs)
+      return ys
     
     
