@@ -392,7 +392,7 @@ class VaMSL(MixtureJointDiBS):
         log_parameter_likelihood = lambda g, t: self.mixture_likelihood_model.log_prob_parameters(g=g, theta=t)
         log_likelihood = lambda g, t, x_n: self.component_likelihood_model.log_likelihood(g=g, theta=t, x=x_n, interv_targets=jnp.zeros_like(x_n))
         
-        return log_likelihood(single_g, single_theta, x_n), log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta)
+        return (log_likelihood(single_g, single_theta, x_n), log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta))
     
     
     def compute_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t, n_responsibility_mc_samples=32):
@@ -400,8 +400,13 @@ class VaMSL(MixtureJointDiBS):
         eps = random.logistic(key, shape=(n_responsibility_mc_samples, single_z.shape[0], single_z.shape[0]))
         
         # [n_responsibility_mc_samples,], [n_responsibility_mc_samples,]
-        mc_samples_log_likelihood, mc_samples_log_joint_prob = vmap(self.compute_particle_log_responsibility_with_hard_graph,
-                                                                    (None, None, 0, None, None, None, None))(x_n, single_z, eps, single_theta, cs_k, E_k, t)
+        if self.parallell_computation:
+            mc_samples = [self.compute_particle_log_responsibility_with_hard_graph(x_n, single_z, ep, single_theta, cs_k, E_k, t) for ep in eps]
+            mc_samples_log_likelihood = jnp.array([sample[0] for sample in mc_samples])
+            mc_samples_log_joint_prob = jnp.array([sample[1] for sample in mc_samples])
+        else:
+            mc_samples_log_likelihood, mc_samples_log_joint_prob = vmap(self.compute_particle_log_responsibility_with_hard_graph,
+                                                                        (None, None, 0, None, None, None, None))(x_n, single_z, eps, single_theta, cs_k, E_k, t)
     
         # compute MC averages using logsumexp and fraction
         expmeanlogprob = lambda x, logprob: logsumexp(a=x, b=logprob/n_responsibility_mc_samples, return_sign=True)[0]
@@ -416,17 +421,23 @@ class VaMSL(MixtureJointDiBS):
     
     def compute_assignmentwise_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t):
         key, *batch_subk = random.split(key, cs_k.shape[0]+1)
-        assignmentwise_particle_log_responsibility = vmap(self.compute_particle_log_responsibility_with_soft_graph,
-                                                              (None, None, None, 0, None, 0, None))(x_n, single_z, single_theta, cs_k,
-                                                                                                    E_k, jnp.array(batch_subk), t)
+        if self.parallell_computation:
+            assignmentwise_particle_log_responsibility = jnp.array([self.compute_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k_n, E_k, subk, t) for cs_k_n, subk in zip(cs_k, jnp.array(batch_subk))])
+        else:
+            assignmentwise_particle_log_responsibility = vmap(self.compute_particle_log_responsibility_with_soft_graph,
+                                                                  (None, None, None, 0, None, 0, None))(x_n, single_z, single_theta, cs_k,
+                                                                                                        E_k, jnp.array(batch_subk), t)
         
         return assignmentwise_particle_log_responsibility
         
         
     def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t, linear=True):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
-        component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
-                                                        (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
+        if self.parallell_computation:
+            component_log_responsibility_mc_samples =  jnp.array([self.compute_assignmentwise_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k, E_k, subk, t) for single_z, single_theta, subk in zip(q_z_k, q_theta_k, jnp.array(batch_subk))])
+        else:
+            component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
+                                                            (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
         
         return component_log_responsibility_mc_samples.mean() + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
     
@@ -445,9 +456,9 @@ class VaMSL(MixtureJointDiBS):
         return unnorm_responsibilities - logsumexp(unnorm_responsibilities)
     
     
-    def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True):
+    def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True, parallell=True):
         key, *batch_subk = random.split(key, x.shape[0]+1)
-        if self.parallell_computation:
+        if self.parallell_computation and parallell:
             log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs,
                                         (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
         else:
@@ -456,11 +467,11 @@ class VaMSL(MixtureJointDiBS):
         return log_responsibilities
         
 
-    def update_responsibilities_with_soft_graphs_and_weights(self, t, key, linear=True):
+    def update_responsibilities_with_soft_graphs_and_weights(self, t, key, linear=True, parallell=True):
         """
         CAVI updates for variational assigments and mixing weight distributions, where responsibilities
         are computed using latent graph embeddings.
-        Responsibilities and weights are updated together to avoid going out of sync. 
+        Responsibilities and weights are updated together to avoid going out of sync.
 
         Args:
             None
@@ -470,7 +481,7 @@ class VaMSL(MixtureJointDiBS):
 
         """                    
         # Update variational distributions for responsibilities and mixing weights 
-        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear)
+        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear, parallell=parallell)
         self.update_mixing_weigths()
         
     #
