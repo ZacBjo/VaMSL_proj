@@ -438,14 +438,14 @@ class VaMSL(MixtureJointDiBS):
     def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t, linear=True):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
         if self.parallell_computation:
-            component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
+            component_log_responsibility_mc_samples =  vmap(self.compute_particle_log_responsibility_with_soft_graph,
                                                                 (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
         else:
             if not linear:
                 # unstack parameter jax pytree for list comprehension, see: https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
                 leaves, treedef = jax.tree_util.tree_flatten(q_theta_k)
                 q_theta_k = [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
-            component_log_responsibility_mc_samples =  jnp.array([self.compute_assignmentwise_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k, E_k, subk, t) for single_z, single_theta, subk in zip(q_z_k, q_theta_k, jnp.array(batch_subk))])
+            component_log_responsibility_mc_samples =  jnp.array([self.compute_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k, E_k, subk, t) for single_z, single_theta, subk in zip(q_z_k, q_theta_k, jnp.array(batch_subk))])
         
         return component_log_responsibility_mc_samples.mean() + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
     
@@ -453,7 +453,7 @@ class VaMSL(MixtureJointDiBS):
     def compute_normalized_log_responsibilities_with_soft_graphs(self, x_n, q_z, q_theta, q_pi, E, key, t, linear=True):
         # Sample observation assignments
         key, subk = random.split(key)
-        cs = self.sample_assignments(subk, samples=self.n_mixture_grad_mc_samples)
+        cs = self.sample_assignments(subk, samples=q_z.shape[0])#self.n_mixture_grad_mc_samples)
         key, *batch_subk = random.split(key, q_z.shape[0]+1)
         if linear:
             unnorm_responsibilities = vmap(self.compute_component_log_responsibility_with_soft_graphs,
