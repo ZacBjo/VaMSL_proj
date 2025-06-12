@@ -465,6 +465,7 @@ class MixtureJointDiBS(MixtureDiBS):
             # Unpack results
             q_z = jnp.stack([q_z_theta_baselines[k][0] for k in range(q_z.shape[0])], axis=0)
             q_theta = [q_z_theta_baselines[k][1] for k in range(q_z.shape[0])]
+            q_theta = jnp.array(q_theta) if linear else q_theta
             sf_baselines = jnp.array([q_z_theta_baselines[k][2] for k in range(q_z.shape[0])])
             
             return q_z, q_theta, sf_baselines        
