@@ -182,7 +182,7 @@ class MixtureDenseNonlinearGaussian:
 
         # to float64
         prec64 = False#'JAX_ENABLE_X64' in os.environ and os.environ['JAX_ENABLE_X64'] == 'True'
-        theta = tree_map(lambda arr: arr.astype(jnp.float64 if prec64 else jnp.float16), theta)
+        theta = tree_map(lambda arr: arr.astype(jnp.float64 if prec64 else jnp.float32), theta)
         return theta
 
 

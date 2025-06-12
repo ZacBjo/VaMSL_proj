@@ -181,7 +181,7 @@ class DenseNonlinearGaussian:
             raise ValueError(f"invalid shape size for nn param initialization {shape}")
 
         # to float64
-        prec64 = 'JAX_ENABLE_X64' in os.environ and os.environ['JAX_ENABLE_X64'] == 'True'
+        prec64 = False#'JAX_ENABLE_X64' in os.environ and os.environ['JAX_ENABLE_X64'] == 'True'
         theta = tree_map(lambda arr: arr.astype(jnp.float64 if prec64 else jnp.float32), theta)
         return theta
 
