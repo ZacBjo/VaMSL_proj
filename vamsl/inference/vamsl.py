@@ -51,6 +51,7 @@ class VaMSL(MixtureJointDiBS):
                  n_grad_mc_samples=128,
                  n_acyclicity_mc_samples=32,
                  n_mixture_grad_mc_samples=32,
+                 n_responsibility_mc_samples=32,
                  stochastic_elicitation=False,
                  grad_estimator_z="reparam",
                  score_function_baseline=0.0,
@@ -68,6 +69,7 @@ class VaMSL(MixtureJointDiBS):
         self.n_particles = n_particles
         self.sf_baselines = sf_baselines
         self.previous_cs = None
+        self.n_responsibility_mc_samples = n_responsibility_mc_samples
 
         self.mixture_likelihood_model = mixture_likelihood_model
         self.component_likelihood_model = component_likelihood_model
@@ -395,19 +397,20 @@ class VaMSL(MixtureJointDiBS):
         return (log_likelihood(single_g, single_theta, x_n), log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta))
     
     
-    def compute_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t, n_responsibility_mc_samples=32):
+    def compute_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t, n_responsibility_mc_samples=None):
+        n_responsibility_mc_samples = self.n_responsibility_mc_samples if n_responsibility_mc_samples is None else n_responsibility_mc_samples
         # [n_responsibility_mc_samples, d, d]
         eps = random.logistic(key, shape=(n_responsibility_mc_samples, single_z.shape[0], single_z.shape[0]))
         
         # [n_responsibility_mc_samples,], [n_responsibility_mc_samples,]
         if self.parallell_computation:
+            mc_samples_log_likelihood, mc_samples_log_joint_prob = vmap(self.compute_particle_log_responsibility_with_hard_graph,
+                                                                        (None, None, 0, None, None, None, None))(x_n, single_z, eps, single_theta, cs_k, E_k, t)
+        else:
             mc_samples = [self.compute_particle_log_responsibility_with_hard_graph(x_n, single_z, ep, single_theta, cs_k, E_k, t) for ep in eps]
             mc_samples_log_likelihood = jnp.array([sample[0] for sample in mc_samples])
             mc_samples_log_joint_prob = jnp.array([sample[1] for sample in mc_samples])
-        else:
-            mc_samples_log_likelihood, mc_samples_log_joint_prob = vmap(self.compute_particle_log_responsibility_with_hard_graph,
-                                                                        (None, None, 0, None, None, None, None))(x_n, single_z, eps, single_theta, cs_k, E_k, t)
-    
+        
         # compute MC averages using logsumexp and fraction
         expmeanlogprob = lambda x, logprob: logsumexp(a=x, b=logprob/n_responsibility_mc_samples, return_sign=True)[0]
         expmean = lambda x: logsumexp(a=x, b=1/n_responsibility_mc_samples, return_sign=True)[0]
@@ -422,26 +425,26 @@ class VaMSL(MixtureJointDiBS):
     def compute_assignmentwise_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t):
         key, *batch_subk = random.split(key, cs_k.shape[0]+1)
         if self.parallell_computation:
-            assignmentwise_particle_log_responsibility = jnp.array([self.compute_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k_n, E_k, subk, t) for cs_k_n, subk in zip(cs_k, jnp.array(batch_subk))])
-        else:
             assignmentwise_particle_log_responsibility = vmap(self.compute_particle_log_responsibility_with_soft_graph,
                                                                   (None, None, None, 0, None, 0, None))(x_n, single_z, single_theta, cs_k,
                                                                                                         E_k, jnp.array(batch_subk), t)
+        else:
+            assignmentwise_particle_log_responsibility = jnp.array([self.compute_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k_n, E_k, subk, t) for cs_k_n, subk in zip(cs_k, jnp.array(batch_subk))])
         
         return assignmentwise_particle_log_responsibility
         
         
     def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t, linear=True):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
-        if False:#self.parallell_computation:
+        if self.parallell_computation:
+            component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
+                                                                (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
+        else:
             if not linear:
                 # unstack parameter jax pytree for list comprehension, see: https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
                 leaves, treedef = jax.tree_util.tree_flatten(q_theta_k)
                 q_theta_k = [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
             component_log_responsibility_mc_samples =  jnp.array([self.compute_assignmentwise_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k, E_k, subk, t) for single_z, single_theta, subk in zip(q_z_k, q_theta_k, jnp.array(batch_subk))])
-        else:
-            component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
-                                                                (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
         
         return component_log_responsibility_mc_samples.mean() + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
     
@@ -460,22 +463,23 @@ class VaMSL(MixtureJointDiBS):
         return unnorm_responsibilities - logsumexp(unnorm_responsibilities)
     
     
-    def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True):
+    def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True, batch_size=None):
         key, *batch_subk = random.split(key, x.shape[0]+1)
-        if self.parallell_computation:
-            log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs, (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
-            #batch = x.shape[0]
-        else:
-            #batch = 1
-            log_responsibilities = jnp.array([self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear) for x_n, subk in zip(x, jnp.array(batch_subk))])
-            
-        #get_single_log_resp = lambda x_n: self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear)
-        #log_responsibilities = jax.lax.map(get_single_log_resp, x, batch_size=batch)
+        #if self.parallell_computation:
+        #    log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs, (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
+        #else:
+        #    log_responsibilities = jnp.array([self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear) for x_n, subk in zip(x, jnp.array(batch_subk))])
+        
+        if batch_size is None:
+            batch_size = x.shape[0] if self.parallell_computation else 1
+        
+        get_single_log_resp = lambda x_n: self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear)
+        log_responsibilities = jax.lax.map(get_single_log_resp, x, batch_size=batch)
             
         return log_responsibilities
         
 
-    def update_responsibilities_with_soft_graphs_and_weights(self, t, key, linear=True, parallell=True):
+    def update_responsibilities_with_soft_graphs_and_weights(self, t, key, linear=True, batch_size=None):
         """
         CAVI updates for variational assigments and mixing weight distributions, where responsibilities
         are computed using latent graph embeddings.
@@ -489,7 +493,7 @@ class VaMSL(MixtureJointDiBS):
 
         """                    
         # Update variational distributions for responsibilities and mixing weights 
-        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear)
+        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear, batch_size=None)
         self.update_mixing_weigths()
         
     #
