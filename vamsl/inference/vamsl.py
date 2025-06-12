@@ -474,7 +474,7 @@ class VaMSL(MixtureJointDiBS):
             batch_size = x.shape[0] if self.parallell_computation else 1
         
         get_single_log_resp = lambda x_n: self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear)
-        log_responsibilities = jax.lax.map(get_single_log_resp, x, batch_size=batch)
+        log_responsibilities = jax.lax.map(get_single_log_resp, x, batch_size=batch_size)
             
         return log_responsibilities
         
@@ -493,7 +493,7 @@ class VaMSL(MixtureJointDiBS):
 
         """                    
         # Update variational distributions for responsibilities and mixing weights 
-        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear, batch_size=None)
+        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear, batch_size=batch_size)
         self.update_mixing_weigths()
         
     #
