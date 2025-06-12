@@ -434,9 +434,10 @@ class VaMSL(MixtureJointDiBS):
     def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t, linear=True):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
         if self.parallell_computation:
-            # unstack parameter jax pytree for list comprehension, see: https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
-            leaves, treedef = jax.tree_util.tree_flatten(q_theta_k)
-            q_theta_k = [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
+            if not linear:
+                # unstack parameter jax pytree for list comprehension, see: https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
+                leaves, treedef = jax.tree_util.tree_flatten(q_theta_k)
+                q_theta_k = [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
             component_log_responsibility_mc_samples =  jnp.array([self.compute_assignmentwise_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k, E_k, subk, t) for single_z, single_theta, subk in zip(q_z_k, q_theta_k, jnp.array(batch_subk))])
         else:
             component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
@@ -488,7 +489,7 @@ class VaMSL(MixtureJointDiBS):
 
         """                    
         # Update variational distributions for responsibilities and mixing weights 
-        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear, parallell=parallell)
+        self.log_q_c =  self.compute_log_responsibilities_with_soft_graphs(x=self.x, t=t, key=key, linear=linear)
         self.update_mixing_weigths()
         
     #
