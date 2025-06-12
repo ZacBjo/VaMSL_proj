@@ -388,9 +388,9 @@ class VaMSL(MixtureJointDiBS):
         #g_is_cyclic = acyclic_constr_nograd(g, g.shape[0]) > 0
         #single_g = jnp.select([g_is_cyclic, jnp.logical_not(g_is_cyclic)], [empty_g, g], default=0)
         
-        log_mixture_likelihood = lambda g, t, c: self.mixture_likelihood_model.log_likelihood(g=g, theta=t, x=self.x, c=c, interv_targets=jnp.zeros_like(self.x))
-        log_parameter_likelihood = lambda g, t: self.mixture_likelihood_model.log_prob_parameters(g=g, theta=t)
-        log_likelihood = lambda g, t, x_n: self.component_likelihood_model.log_likelihood(g=g, theta=t, x=x_n, interv_targets=jnp.zeros_like(x_n))
+        log_mixture_likelihood = lambda g, theta, c: self.mixture_likelihood_model.log_likelihood(g=g, theta=theta, x=self.x, c=c, interv_targets=jnp.zeros_like(self.x))
+        log_parameter_likelihood = lambda g, theta: self.mixture_likelihood_model.log_prob_parameters(g=g, theta=theta)
+        log_likelihood = lambda g, theta, x_n: self.component_likelihood_model.log_likelihood(g=g, theta=theta, x=x_n, interv_targets=jnp.zeros_like(x_n))
         
         return (log_likelihood(single_g, single_theta, x_n), log_mixture_likelihood(single_g, single_theta, cs_k) + log_parameter_likelihood(single_g, single_theta))
     
@@ -434,10 +434,13 @@ class VaMSL(MixtureJointDiBS):
     def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t, linear=True):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
         if self.parallell_computation:
+            # unstack parameter jax pytree for list comprehension, see: https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
+            leaves, treedef = jax.tree_util.tree_flatten(q_theta_k)
+            q_theta_k = [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
             component_log_responsibility_mc_samples =  jnp.array([self.compute_assignmentwise_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k, E_k, subk, t) for single_z, single_theta, subk in zip(q_z_k, q_theta_k, jnp.array(batch_subk))])
         else:
             component_log_responsibility_mc_samples =  vmap(self.compute_assignmentwise_particle_log_responsibility_with_soft_graph,
-                                                            (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
+                                                                (None, 0, 0, None, None, 0, None))(x_n, q_z_k, q_theta_k, cs_k, E_k, jnp.array(batch_subk), t)
         
         return component_log_responsibility_mc_samples.mean() + digamma(pi_k) - digamma(jnp.sum(self.q_pi))
     
@@ -456,13 +459,17 @@ class VaMSL(MixtureJointDiBS):
         return unnorm_responsibilities - logsumexp(unnorm_responsibilities)
     
     
-    def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True, parallell=True):
+    def compute_log_responsibilities_with_soft_graphs(self, *, x, t, key, linear=True):
         key, *batch_subk = random.split(key, x.shape[0]+1)
-        if self.parallell_computation and parallell:
-            log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs,
-                                        (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
+        if self.parallell_computation:
+            log_responsibilities = vmap(self.compute_normalized_log_responsibilities_with_soft_graphs, (0, None, None, None, None, 0, None, None))(x, self.q_z, self.q_theta, self.q_pi, self.E, jnp.array(batch_subk), t, linear)
+            #batch = x.shape[0]
         else:
+            #batch = 1
             log_responsibilities = jnp.array([self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear) for x_n, subk in zip(x, jnp.array(batch_subk))])
+            
+        #get_single_log_resp = lambda x_n: self.compute_normalized_log_responsibilities_with_soft_graphs(x_n, self.q_z, self.q_theta, self.q_pi, self.E, subk, t, linear)
+        #log_responsibilities = jax.lax.map(get_single_log_resp, x, batch_size=batch)
             
         return log_responsibilities
         
