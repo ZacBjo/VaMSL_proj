@@ -400,7 +400,7 @@ class VaMSL(MixtureJointDiBS):
         eps = random.logistic(key, shape=(n_responsibility_mc_samples, single_z.shape[0], single_z.shape[0]))
         
         # [n_responsibility_mc_samples,], [n_responsibility_mc_samples,]
-        if False:# self.parallell_computation:
+        if self.parallell_computation:
             mc_samples = [self.compute_particle_log_responsibility_with_hard_graph(x_n, single_z, ep, single_theta, cs_k, E_k, t) for ep in eps]
             mc_samples_log_likelihood = jnp.array([sample[0] for sample in mc_samples])
             mc_samples_log_joint_prob = jnp.array([sample[1] for sample in mc_samples])
@@ -421,7 +421,7 @@ class VaMSL(MixtureJointDiBS):
     
     def compute_assignmentwise_particle_log_responsibility_with_soft_graph(self, x_n, single_z, single_theta, cs_k, E_k, key, t):
         key, *batch_subk = random.split(key, cs_k.shape[0]+1)
-        if False:#self.parallell_computation:
+        if self.parallell_computation:
             assignmentwise_particle_log_responsibility = jnp.array([self.compute_particle_log_responsibility_with_soft_graph(x_n, single_z, single_theta, cs_k_n, E_k, subk, t) for cs_k_n, subk in zip(cs_k, jnp.array(batch_subk))])
         else:
             assignmentwise_particle_log_responsibility = vmap(self.compute_particle_log_responsibility_with_soft_graph,
@@ -433,7 +433,7 @@ class VaMSL(MixtureJointDiBS):
         
     def compute_component_log_responsibility_with_soft_graphs(self, x_n, q_z_k, q_theta_k, cs_k, pi_k, E_k, key, t, linear=True):
         key, *batch_subk = random.split(key, q_z_k.shape[0]+1)
-        if self.parallell_computation:
+        if False:#self.parallell_computation:
             if not linear:
                 # unstack parameter jax pytree for list comprehension, see: https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
                 leaves, treedef = jax.tree_util.tree_flatten(q_theta_k)
