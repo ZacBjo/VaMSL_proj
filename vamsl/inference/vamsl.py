@@ -966,23 +966,45 @@ class VaMSL(MixtureJointDiBS):
 
     
     def get_MAP_graph(self, *, dist):
+        """
+        Get MAP graph from a given particle distribution. The MAP graph maximizes the (unnormalized) posterior probability. 
+
+        Args:
+            dist (:class:`~dibs.metrics.ParticleDistribution`:): particle distribution of graph and parameter samples 
+                                                                 and associated log probabilities.
+        Outputs:
+            MAP_g (ndarray): adjacency matrix of MAP graph of shape ``[n_vars, n_vars]``
+        """
         n_vars = dist.g[0].shape[0]
         # select acyclic graphs
         is_dag = elwise_acyclic_constr_nograd(dist.g, n_vars) == 0
         if is_dag.sum() == 0:
             # score as empty graph only
-            g = jnp.zeros((1, n_vars, n_vars), dtype=dist.g.dtype)
+            gs = jnp.zeros((1, n_vars, n_vars), dtype=dist.g.dtype)
             log_weights = jnp.array([0.0], dtype=dist.logp.dtype)
         else:
-            g = dist.g[is_dag, :, :]
+            gs = dist.g[is_dag, :, :]
             log_weights = dist.logp[is_dag] - logsumexp(dist.logp[is_dag])
+            
+        MAP_g = gs[jnp.argmax(log_weights)]
 
-        return g[jnp.argmax(log_weights)]
+        return MAP_g
 
 
-    def get_MAP_graphs(self, empirical=True, key=None):
-        dists = self.get_component_dists(empirical=empirical, key=key)
+    def get_MAP_graphs(self, key):
+        """
+        Get MAP graphs for each comppnent. The MAP graphs maximize the (unnormalized) posterior probability. 
+
+        Args:
+            key (ndarray): prng key
+            
+        Outputs:
+            MAP_gs (ndarray): adjacency matrices of MAP graphs of shape ``[n_components, n_vars, n_vars]``
+        """
+        dists = self.get_component_dists(empirical=False, key=key)
         
-        return jnp.array([self.get_MAP_graph(dist=dist) for dist in dists])
+        MAP_gs = jnp.array([self.get_MAP_graph(dist=dist) for dist in dists])
+        
+        return MAP_gs
     
     
